@@ -1,0 +1,11 @@
+.git
+.github
+deploy
+docs
+sdks
+**/*_test.go
+*.md
+!README.md
+tenarium
+tenarium.exe
+dist

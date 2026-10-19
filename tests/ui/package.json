@@ -1,0 +1,12 @@
+{
+  "name": "tenarium-ui-tests",
+  "private": true,
+  "description": "Browser tests of the Tenarium admin UI (Playwright).",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0"
+  }
+}

@@ -1,0 +1,154 @@
+# Tenarium example configuration (in-memory store; see docs/configuration.md).
+# ${VAR} is expanded from the environment.
+server:
+  addr: ":8080"
+  api_keys: ["${TENARIUM_API_KEY}"]
+  shutdown_timeout: 15s
+
+log:
+  level: info      # debug | info | warn | error
+  format: text     # text | json
+
+store:
+  driver: memory   # memory | postgres
+  # dsn: postgres://tenarium:tenarium@localhost:5432/tenarium?sslmode=disable
+
+events:
+  poll_interval: 1s
+  batch_size: 100
+  handler_timeout: 30s
+  lease_ttl: 15s
+  retention: 2160h          # keep 90 days of events (0 = forever)
+
+tenants:
+  require_known_plans: true
+  member_roles: [owner, admin, member, viewer]
+  reserved_domains: [localhost.localdomain]   # your platform domains (tenants cannot claim them)
+  deletion_grace_period: 168h                 # deleted tenants can be restored for a week
+  # regions: [eu, us]                        # data residency (docs/plans.md); new tenants pick one
+  # default_region: eu
+  # purge_after: 2160h                        # remove data of tenants deleted 90 days ago
+  settings_schema:
+    type: object
+    properties:
+      region: {enum: [eu, us, ap]}
+      theme: {type: object}
+
+bootstrap:
+  plans:
+    - id: free
+      name: Free
+      features: {sso: false, audit_log: false}
+      limits: {members: 5, api_calls: 10000}
+    - id: pro
+      name: Pro
+      features: {sso: true, audit_log: true}
+      limits: {members: 100, api_calls: 1000000}
+
+  users:
+    - email: admin@example.com
+      name: Admin
+      roles: [admin]
+      password: "${TENARIUM_ADMIN_PASSWORD}"
+
+users:
+  directory: internal          # or a user directory plugin instance, e.g. keycloak
+  public_url: http://localhost:8080
+  password_min_length: 12
+  magic_link_ttl: 15m          # passwordless sign-in links (0 disables them)
+  # breached_password_check: true   # reject passwords found in breaches (Have I Been Pwned)
+
+auth:
+  tokens: {enabled: true, access_ttl: 15m, refresh_ttl: 720h, rotation_period: 720h}
+  rate_limit: 30
+  sso: {enabled: true}       # per-tenant OIDC and SAML sign-in (docs/auth.md)
+  # webauthn: {enabled: true}  # passkeys; needs a domain in users.public_url
+  # social:                    # sign in with Google, GitHub, Microsoft or any OIDC provider
+  #   providers:
+  #     - {name: google, type: google, client_id: "${GOOGLE_CLIENT_ID}", client_secret: "${GOOGLE_CLIENT_SECRET}"}
+  #     - {name: github, type: github, client_id: "${GITHUB_CLIENT_ID}", client_secret: "${GITHUB_CLIENT_SECRET}"}
+
+usage:
+  metrics:
+    api_calls: {period: month, overage: allow, thresholds: [80, 100]}
+
+scheduler:
+  interval: 30s
+
+webhooks:                    # self-service tenant webhooks (docs/webhooks.md)
+  enabled: true
+  max_failures: 50
+
+tracing:                     # OpenTelemetry (OTLP/HTTP)
+  enabled: false
+  endpoint: localhost:4318
+  insecure: true
+
+ui:
+  enabled: true
+
+# Plugins start in this order (provisioners run in this order too).
+plugins:
+  - plugin: policy
+    config:
+      reserved_slugs: [www, admin, api, app]
+      default_plan: free
+
+  - plugin: logger
+    config:
+      events: ["tenant.*"]
+
+  - plugin: rbac
+    enabled: false
+    config:
+      roles:
+        admin: ["*"]
+        viewer: ["*:read"]
+      bindings:
+        "core/api-key:api-key-0": [admin]
+
+  - plugin: oidc
+    name: keycloak
+    enabled: false
+    config:
+      issuer: http://localhost:8180/realms/platform
+      audience: tenarium
+      tenant_claim: tenant
+
+  - plugin: kafka
+    enabled: false
+    config:
+      brokers: ["localhost:19092"]
+      topic: tenarium.events
+      create_topic: {partitions: 3}
+
+  - plugin: webhook
+    name: billing-webhook
+    enabled: false
+    config:
+      url: https://billing.example.com/hooks/tenarium
+      secret: "${BILLING_WEBHOOK_SECRET}"
+      events: [tenant.created, tenant.deleted, tenant.plan_changed]
+
+  - plugin: smtp
+    enabled: false
+    config:
+      host: localhost
+      port: 1025                 # e.g. Mailpit for development
+      tls: none
+      allow_insecure: true
+      from: "Tenarium <no-reply@example.com>"
+
+  - plugin: redis
+    enabled: false
+    config:
+      addr: localhost:6379
+      publish: {stream: events}
+      cache: {}
+
+  - plugin: external
+    name: guard
+    enabled: false
+    config:
+      command: ["node", "sdks/typescript/examples/guard.ts"]
+      config: {forbidden_prefix: "test-"}

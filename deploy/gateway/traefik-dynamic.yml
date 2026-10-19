@@ -1,0 +1,64 @@
+# Traefik dynamic configuration for tenarium-gateway (file provider). See
+# traefik.yml for the two-hop layout.
+http:
+  middlewares:
+    tenarium:
+      forwardAuth:
+        # Traefik sends X-Forwarded-Method, -Proto, -Host and -Uri plus the
+        # client's headers (Authorization, X-Tenant-ID, ...).
+        address: http://tenarium-gateway:8090/traefik
+        # Overwrite, rather than trust, X-Forwarded-* sent by clients.
+        trustForwardHeader: false
+        # Copied to the forwarded request; client values are removed first.
+        authResponseHeaders:
+          - X-Tenant-Id
+          - X-Tenant-Slug
+          - X-Tenant-Plan
+          - X-Tenant-Cell
+          - X-Tenant-Features
+        # Non-2xx answers (401/403/404/429/503 with JSON body, Retry-After
+        # and RateLimit-*) are returned to the client as they are.
+
+  routers:
+    # Hop 1: public entrypoint, authenticate and hand over to "cells".
+    edge:
+      entryPoints: [web]
+      rule: "PathPrefix(`/`)"
+      middlewares: [tenarium]
+      service: cells-hop
+
+    # Hop 2: route on the header set by ForwardAuth.
+    cell-eu-1:
+      entryPoints: [cells]
+      rule: "Header(`X-Tenant-Cell`, `eu-1`)"
+      priority: 100
+      service: cell-eu-1
+    cell-dedicated:
+      entryPoints: [cells]
+      rule: "Header(`X-Tenant-Cell`, `dedicated`)"
+      priority: 100
+      service: cell-dedicated
+    cell-shared:
+      entryPoints: [cells]
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      service: cell-shared
+
+  services:
+    cells-hop:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://127.0.0.1:8081
+    cell-shared:
+      loadBalancer:
+        servers:
+          - url: http://app-shared:8080
+    cell-eu-1:
+      loadBalancer:
+        servers:
+          - url: http://app-eu-1:8080
+    cell-dedicated:
+      loadBalancer:
+        servers:
+          - url: http://app-dedicated:8080

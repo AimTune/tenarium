@@ -1,0 +1,25 @@
+{
+  "name": "@tenarium/plugin-sdk",
+  "version": "0.1.0",
+  "description": "Write Tenarium external plugins in TypeScript or JavaScript.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AimTune/tenarium",
+    "directory": "sdks/typescript"
+  }
+}

@@ -1,0 +1,19 @@
+# Credentials for a Tenarium server. The API key needs tenants:* and plans:*.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tenarium-credentials
+  namespace: default
+stringData:
+  api-key: change-me
+---
+apiVersion: tenarium.io/v1alpha1
+kind: TenariumConnection
+metadata:
+  name: tenarium
+  namespace: default
+spec:
+  url: http://tenarium.tenarium-system.svc:8080
+  apiKeySecretRef:
+    name: tenarium-credentials
+    key: api-key

@@ -1,0 +1,42 @@
+# Configuration used by docker-compose.yaml.
+server:
+  addr: ":8080"
+  api_keys: ["${TENARIUM_API_KEY}"]
+
+log:
+  level: info
+  format: json
+
+store:
+  driver: postgres
+  dsn: postgres://tenarium:tenarium@postgres:5432/tenarium?sslmode=disable
+
+tenants:
+  require_known_plans: true
+
+bootstrap:
+  plans:
+    - id: free
+      name: Free
+      features: {sso: false, audit_log: false}
+      limits: {members: 5, api_calls: 10000}
+    - id: pro
+      name: Pro
+      features: {sso: true, audit_log: true}
+      limits: {members: 100, api_calls: 1000000}
+
+plugins:
+  - plugin: policy
+    config:
+      reserved_slugs: [www, admin, api, app]
+      default_plan: free
+
+  - plugin: kafka
+    config:
+      brokers: ["redpanda:9092"]
+      topic: tenarium.events
+      create_topic: {partitions: 6}
+
+  - plugin: logger
+    config:
+      events: ["tenant.*"]

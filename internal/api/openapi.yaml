@@ -1,0 +1,3605 @@
+openapi: 3.1.0
+info:
+  title: Tenarium API
+  version: "1.0"
+  summary: Tenant control plane for multi-tenant SaaS.
+  description: |
+    Manage tenants, plans, members, usage quotas and the event log.
+
+    **Authentication.** Every `/v1` request needs credentials understood by one of the
+    configured authenticators: a static API key or an OIDC access token as
+    `Authorization: Bearer <token>`, or LDAP credentials as HTTP Basic auth.
+
+    **Authorization.** Tenant-scoped callers (tokens carrying a tenant) can only reach
+    their own tenant and its descendants. Authorizer plugins (e.g. `rbac`) decide the rest.
+
+    **Concurrency.** Mutable resources return an `ETag` with their version. Send it back
+    as `If-Match` to make an update fail with 412 if someone else changed the resource.
+
+    **Retries.** `POST` requests accept an `Idempotency-Key` header; a retry with the same
+    key and body returns the original response with `Idempotent-Replayed: true`.
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+security:
+  - bearer: []
+  - basic: []
+
+tags:
+  - name: Tenants
+  - name: Schedule
+  - name: Members
+  - name: Usage
+  - name: Plans
+  - name: Rollouts
+  - name: Users
+  - name: Auth
+  - name: API keys
+  - name: Domains
+  - name: Webhooks
+  - name: SSO
+  - name: SCIM
+  - name: Roles
+  - name: Privacy
+  - name: OpenID provider
+  - name: Events
+  - name: Operations
+
+paths:
+  /v1/tenants:
+    get:
+      tags: [Tenants]
+      summary: List tenants
+      operationId: listTenants
+      parameters:
+        - {name: status, in: query, schema: {$ref: "#/components/schemas/TenantStatus"}}
+        - {name: plan, in: query, schema: {type: string}}
+        - {name: parent_id, in: query, description: ID or slug of the parent tenant, schema: {type: string}}
+        - name: label
+          in: query
+          description: "Label selector `key=value`; repeat for AND."
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
+        - {name: include_deleted, in: query, schema: {type: boolean}}
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of tenants ordered by creation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TenantPage"}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Tenants]
+      summary: Create a tenant
+      description: |
+        Runs `tenant.before_create` hooks, then stores the tenant and emits `tenant.created`.
+        With provisioners configured the tenant starts in `provisioning` and becomes
+        `active` (or `failed`) asynchronously.
+      operationId: createTenant
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TenantCreate"}
+      responses:
+        "201":
+          description: Created.
+          headers:
+            ETag: {$ref: "#/components/headers/ETag"}
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Tenants]
+      summary: Get a tenant
+      operationId: getTenant
+      responses:
+        "200":
+          description: The tenant.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [Tenants]
+      summary: Update a tenant
+      description: |
+        Partial update. `labels`, `features` and `limits` replace the whole map;
+        `settings` is a JSON merge patch (RFC 7386, `null` removes a key). Changing
+        `plan`, `features` or `limits` additionally requires `plans:write`.
+      operationId: updateTenant
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TenantUpdate"}
+      responses:
+        "200":
+          description: Updated tenant.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Tenants]
+      summary: Delete a tenant
+      description: |
+        Starts deletion. Tenants with live child tenants cannot be deleted.
+
+        With `tenants.deletion_grace_period` configured, the tenant is instead suspended
+        (reason `pending deletion`) and a `delete` action is scheduled for the end of the
+        grace period; `POST /v1/tenants/{id}/restore` undoes it until then. Repeating the
+        request returns the same scheduled deletion. `force=true` deletes immediately and
+        requires the platform-only `tenants:purge` permission.
+      operationId: deleteTenant
+      parameters:
+        - {name: force, in: query, schema: {type: boolean}, description: Skip the grace period.}
+      responses:
+        "202":
+          description: |
+            Deletion accepted: `deleting`, `deleted` without provisioners, or `suspended`
+            pending deletion (the `Tenarium-Deletion-At` header gives the time).
+          headers:
+            Tenarium-Deletion-At: {schema: {type: string, format: date-time}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/restore:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    post:
+      tags: [Tenants]
+      summary: Cancel a pending deletion
+      description: |
+        Cancels the scheduled deletion and resumes the tenant if it was suspended for it
+        (a tenant suspended earlier for another reason stays suspended). Requires
+        `tenants:delete`. 409 if no deletion is pending.
+      operationId: restoreTenant
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/scim/v2/ServiceProviderConfig:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [SCIM]
+      summary: SCIM service provider configuration
+      description: |
+        SCIM 2.0 (RFC 7643/7644) base URL for identity providers:
+        `<base>/v1/tenants/{id}/scim/v2`, authenticated with a tenant API key (`tnr_...`)
+        holding `members:read` and `members:write` (e.g. role `admin`). SCIM Users are the
+        tenant's memberships; SCIM Groups are its member roles. Responses use
+        `application/scim+json`.
+      operationId: scimServiceProviderConfig
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+  /v1/tenants/{id}/scim/v2/ResourceTypes:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [SCIM]
+      summary: SCIM resource types
+      operationId: scimResourceTypes
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+  /v1/tenants/{id}/scim/v2/Schemas:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [SCIM]
+      summary: SCIM schemas
+      operationId: scimSchemas
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+  /v1/tenants/{id}/scim/v2/Users:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [SCIM]
+      summary: List SCIM users (members)
+      description: 'Filters: `userName eq "..."`, `emails.value eq "..."`, `id eq "..."`. Paging with `startIndex` and `count`.'
+      operationId: scimListUsers
+      parameters:
+        - {name: filter, in: query, schema: {type: string}}
+        - {name: startIndex, in: query, schema: {type: integer, minimum: 1}}
+        - {name: count, in: query, schema: {type: integer, maximum: 200}}
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    post:
+      tags: [SCIM]
+      summary: Provision a user
+      description: |
+        Adds (or invites) a member by `userName`/primary email with `roles[0].value` or the
+        default role. `active: false` creates a suspended membership. The name is only
+        applied to users whose email domain is a verified domain of the tenant.
+      operationId: scimCreateUser
+      requestBody: {$ref: "#/components/requestBodies/SCIM"}
+      responses:
+        "201": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+  /v1/tenants/{id}/scim/v2/Users/{user}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: user, in: path, required: true, schema: {type: string}, description: Member ID.}
+    get:
+      tags: [SCIM]
+      summary: Get a SCIM user
+      operationId: scimGetUser
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    put:
+      tags: [SCIM]
+      summary: Replace a SCIM user
+      description: Sets role, `active` (absent means true) and name. `userName` cannot change.
+      operationId: scimReplaceUser
+      requestBody: {$ref: "#/components/requestBodies/SCIM"}
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    patch:
+      tags: [SCIM]
+      summary: Patch a SCIM user
+      description: 'PatchOp with paths `active` (also "True"/"False" strings), `displayName`, `name.formatted`, `roles`, or a value object without path. Other attributes are ignored.'
+      operationId: scimPatchUser
+      requestBody: {$ref: "#/components/requestBodies/SCIM"}
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    delete:
+      tags: [SCIM]
+      summary: Deprovision a user (remove the membership)
+      operationId: scimDeleteUser
+      responses:
+        "204": {description: Removed.}
+        default: {$ref: "#/components/responses/SCIMError"}
+  /v1/tenants/{id}/scim/v2/Groups:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [SCIM]
+      summary: List role groups
+      description: One group per member role; its members hold that role. `excludedAttributes=members` is honoured.
+      operationId: scimListGroups
+      parameters:
+        - {name: filter, in: query, schema: {type: string}}
+        - {name: excludedAttributes, in: query, schema: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    post:
+      tags: [SCIM]
+      summary: Push a role group
+      description: '`displayName` must be a member role; listed members get the role.'
+      operationId: scimCreateGroup
+      requestBody: {$ref: "#/components/requestBodies/SCIM"}
+      responses:
+        "201": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+  /v1/tenants/{id}/scim/v2/Groups/{group}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: group, in: path, required: true, schema: {type: string}, description: Role name.}
+    get:
+      tags: [SCIM]
+      summary: Get a role group
+      operationId: scimGetGroup
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    put:
+      tags: [SCIM]
+      summary: Set the holders of a role
+      description: Listed members get the role; other holders fall back to the default role.
+      operationId: scimReplaceGroup
+      requestBody: {$ref: "#/components/requestBodies/SCIM"}
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    patch:
+      tags: [SCIM]
+      summary: Add or remove role holders
+      description: 'PatchOp on `members` (add, remove, replace) or `members[value eq "id"]` (remove).'
+      operationId: scimPatchGroup
+      requestBody: {$ref: "#/components/requestBodies/SCIM"}
+      responses:
+        "200": {$ref: "#/components/responses/SCIM"}
+        default: {$ref: "#/components/responses/SCIMError"}
+    delete:
+      tags: [SCIM]
+      summary: Return every holder of the role to the default role
+      operationId: scimDeleteGroup
+      responses:
+        "204": {description: Done.}
+        default: {$ref: "#/components/responses/SCIMError"}
+  /v1/tenants/{id}/roles:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Roles]
+      summary: Built-in and custom roles of the tenant
+      operationId: listRoles
+      responses:
+        "200":
+          description: Roles with their action patterns.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Role"}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/roles/{role}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: role, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Roles]
+      summary: Get a role
+      operationId: getRole
+      responses:
+        "200":
+          description: The role.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Role"}
+        default: {$ref: "#/components/responses/Error"}
+    put:
+      tags: [Roles]
+      summary: Create or replace a custom role
+      description: |
+        `actions` are glob patterns over `GET /v1/actions` (e.g. `members:*`); each must match
+        at least one action. The caller must itself hold every action the role covers on the
+        tenant (403 otherwise), so roles can never be used to escalate. Built-in role names
+        are reserved. Requires `roles:write`.
+      operationId: putRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actions]
+              properties:
+                description: {type: string}
+                actions: {type: array, items: {type: string}}
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Role"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Roles]
+      summary: Delete a custom role
+      description: 409 while a member, group or API key uses it.
+      operationId: deleteRole
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/groups:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Roles]
+      summary: List the tenant's groups (teams)
+      operationId: listGroups
+      responses:
+        "200":
+          description: Groups.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Group"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Roles]
+      summary: Create a group
+      description: Members of a group additionally hold its roles. Granting roles needs the caller to hold their actions.
+      operationId: createGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GroupInput"}
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Group"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/groups/{group}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: group, in: path, required: true, schema: {type: string}, description: Group ID or name.}
+    get:
+      tags: [Roles]
+      summary: Get a group
+      operationId: getGroup
+      responses:
+        "200":
+          description: The group.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Group"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [Roles]
+      summary: Update a group
+      operationId: updateGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GroupInput"}
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Group"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Roles]
+      summary: Delete a group
+      operationId: deleteGroup
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/groups/{group}/members/{member}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: group, in: path, required: true, schema: {type: string}}
+      - {name: member, in: path, required: true, schema: {type: string}}
+    put:
+      tags: [Roles]
+      summary: Add a member to a group
+      operationId: addGroupMember
+      responses:
+        "200":
+          description: The group.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Group"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Roles]
+      summary: Remove a member from a group
+      operationId: removeGroupMember
+      responses:
+        "200":
+          description: The group.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Group"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/export:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Privacy]
+      summary: Export a tenant's data
+      description: |
+        Everything Tenarium stores about the tenant (no secrets): the tenant, entitlements,
+        members, usage history, domains, API key metadata, webhooks, SSO, roles, groups,
+        schedule and up to 10,000 audit events. Requires `data:export` (tenant owners and
+        admins have it).
+      operationId: exportTenant
+      responses:
+        "200": {$ref: "#/components/responses/Export"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/sso:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [SSO]
+      summary: Get the tenant's SSO connection
+      operationId: getSSO
+      responses:
+        "200":
+          description: The connection (without the client secret).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SSOConnection"}
+        default: {$ref: "#/components/responses/Error"}
+    put:
+      tags: [SSO]
+      summary: Configure the tenant's OpenID Connect provider
+      description: |
+        `domains` must be verified domains of the tenant (`/v1/tenants/{id}/domains`), so a
+        tenant's provider can only sign in users of email domains the tenant controls.
+        Register `<users.public_url>/v1/auth/sso/callback` as redirect URI at the provider.
+        `client_secret` may be omitted on update to keep the current one. With `enforce`,
+        password logins of those domains are refused (platform users signing in without a
+        tenant are exempt as break-glass). Requires `sso:write`.
+      operationId: putSSO
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SSOInput"}
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SSOConnection"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [SSO]
+      summary: Remove the SSO connection
+      operationId: deleteSSO
+      responses:
+        "204": {description: Removed.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/webhooks:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Webhooks]
+      summary: List the tenant's webhooks
+      operationId: listWebhooks
+      responses:
+        "200":
+          description: Webhooks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Webhook"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Webhooks]
+      summary: Register a webhook
+      description: |
+        The tenant's events (optionally filtered by `types` globs) are POSTed as CloudEvents
+        with Standard Webhooks headers (`webhook-id`, `webhook-timestamp`,
+        `webhook-signature`). URLs must be https and public; redirects are not followed.
+        The secret is returned only here. Requires `webhooks:write`.
+      operationId: createWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebhookInput"}
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook: {$ref: "#/components/schemas/Webhook"}
+                  secret: {type: string, description: "whsec_..., shown once."}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/webhooks/{webhook}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: webhook, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Webhooks]
+      summary: Get a webhook
+      operationId: getWebhook
+      responses:
+        "200":
+          description: The webhook.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Webhook"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [Webhooks]
+      summary: Update a webhook
+      description: Omitted fields are unchanged. Re-enabling resets the failure counter.
+      operationId: updateWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebhookInput"}
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Webhook"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Webhooks]
+      summary: Delete a webhook and its delivery log
+      operationId: deleteWebhook
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/webhooks/{webhook}/rotate-secret:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: webhook, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [Webhooks]
+      summary: Replace the signing secret
+      operationId: rotateWebhookSecret
+      responses:
+        "200":
+          description: The new secret, shown once.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {secret: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/webhooks/{webhook}/test:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: webhook, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [Webhooks]
+      summary: Send a webhook.test event now
+      operationId: testWebhook
+      responses:
+        "200":
+          description: The logged delivery.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WebhookDelivery"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/webhooks/{webhook}/deliveries:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: webhook, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Webhooks]
+      summary: Delivery log, newest first
+      operationId: listWebhookDeliveries
+      parameters:
+        - {name: before, in: query, description: Delivery ID from `next`., schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        "200":
+          description: Deliveries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/WebhookDelivery"}}
+                  next: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/webhooks/{webhook}/deliveries/{delivery}/redeliver:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: webhook, in: path, required: true, schema: {type: string}}
+      - {name: delivery, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [Webhooks]
+      summary: Send a logged delivery again
+      description: Same payload and `webhook-id`, so receivers can deduplicate.
+      operationId: redeliverWebhook
+      responses:
+        "200":
+          description: The new delivery.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WebhookDelivery"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/schedule:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Schedule]
+      summary: List a tenant's scheduled actions
+      operationId: listSchedule
+      responses:
+        "200":
+          description: All actions (pending and finished) by run time.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/ScheduledAction"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Schedule]
+      summary: Schedule an action
+      description: |
+        Runs `suspend`, `resume`, `set_plan` or `delete` at a later time, e.g. to end a
+        trial. Requires the same permissions as performing the action directly
+        (`set_plan` needs `tenants:update` and `plans:write`). Executed actions emit their
+        usual events with actor `system:scheduler`; a failed one (e.g. rejected by a hook)
+        emits `tenant.action_failed`.
+      operationId: scheduleAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ScheduleInput"}
+      responses:
+        "201":
+          description: Scheduled.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ScheduledAction"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/schedule/{action}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: action, in: path, required: true, schema: {type: string}, description: Scheduled action ID.}
+    delete:
+      tags: [Schedule]
+      summary: Cancel a pending action
+      operationId: cancelScheduledAction
+      responses:
+        "200":
+          description: Canceled.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ScheduledAction"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/suspend:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    post:
+      tags: [Tenants]
+      summary: Suspend an active tenant
+      operationId: suspendTenant
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {reason: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/resume:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    post:
+      tags: [Tenants]
+      summary: Resume a suspended tenant
+      operationId: resumeTenant
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/retry-provisioning:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    post:
+      tags: [Tenants]
+      summary: Retry provisioning of a failed tenant
+      operationId: retryProvisioning
+      responses:
+        "202": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/children:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Tenants]
+      summary: List child tenants
+      operationId: listChildren
+      parameters: [{$ref: "#/components/parameters/After"}, {$ref: "#/components/parameters/Limit"}]
+      responses:
+        "200":
+          description: Children of the tenant.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TenantPage"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/entitlements:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Tenants]
+      summary: Effective features and limits
+      description: The plan's (or pinned revision's) features and limits, plus add-ons and feature rollouts, with the tenant's overrides applied.
+      operationId: getEntitlements
+      responses:
+        "200":
+          description: Entitlements.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Entitlements"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/plan-revision:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    put:
+      tags: [Plans]
+      summary: Pin or unpin a plan revision
+      description: |
+        Pins the tenant to a recorded revision of its plan (grandfathering), or unpins it with
+        `revision: 0` so it follows the current plan. Needs `plans:write` (platform-only).
+      operationId: setPlanRevision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision]
+              properties:
+                revision: {type: integer, format: int64, minimum: 0}
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/move:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    post:
+      tags: [Tenants]
+      summary: Move a tenant to another region
+      description: |
+        Records the new region and emits `tenant.region_changed` (with the previous tenant), on
+        which subscribers migrate the data. Needs the platform-only `tenants:move`.
+      operationId: moveTenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [region]
+              properties:
+                region: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/clone:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    post:
+      tags: [Tenants]
+      summary: Clone a tenant
+      description: |
+        Creates a tenant with the source's plan, add-ons, region, labels, settings, features,
+        limits, branding and custom roles, labelled `tenarium.io/cloned-from`. With
+        `members: true` its active members are added too. Domains, SSO, API keys, webhooks and
+        usage are not copied. Needs `tenants:create` (and `plans:write` when the source has a plan
+        or overrides); the caller must hold every action of the copied roles.
+      operationId: cloneTenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, name]
+              properties:
+                slug: {type: string}
+                name: {type: string}
+                parent_id: {type: string}
+                members: {type: boolean}
+      responses:
+        "201":
+          description: The copy.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/health:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Tenants]
+      summary: Tenant health score
+      description: |
+        100 minus the impact of each factor found: lifecycle status, maintenance, usage at or
+        near limits, quota refusals (7 days), provisioning failures (30 days), undelivered
+        events, and member activity. Grades: healthy (80+), at_risk (50-79), critical.
+      operationId: tenantHealth
+      responses:
+        "200":
+          description: Health.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant_id: {type: string}
+                  score: {type: integer, minimum: 0, maximum: 100}
+                  grade: {type: string, enum: [healthy, at_risk, critical]}
+                  factors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: {type: string}
+                        impact: {type: integer}
+                        detail: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/maintenance:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    post:
+      tags: [Tenants]
+      summary: Start a maintenance window
+      description: |
+        Until it ends (or `until` passes) the tenant is read-only for tenant-scoped callers, who
+        get 503 `maintenance`; platform callers can still change it, e.g. to move it to another
+        region or cell. Emits `tenant.maintenance_started`. Needs `tenants:suspend`.
+      operationId: startMaintenance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message: {type: string, maxLength: 500}
+                until: {type: string, format: date-time}
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Tenants]
+      summary: End the maintenance window
+      description: Emits `tenant.maintenance_ended`. Needs `tenants:resume`.
+      operationId: endMaintenance
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/members:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Members]
+      summary: List members
+      operationId: listMembers
+      responses:
+        "200":
+          description: Members and the allowed roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, roles]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Member"}}
+                  roles: {type: array, items: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Members]
+      summary: Add or invite a member
+      description: Without `user_id` the member is `invited`. Enforces the `members` limit (429).
+      operationId: addMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MemberCreate"}
+      responses:
+        "201":
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Member"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/members/{member}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: member, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      tags: [Members]
+      summary: Get a member
+      operationId: getMember
+      responses:
+        "200":
+          description: The member.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Member"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [Members]
+      summary: Change role or accept an invitation
+      operationId: updateMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: {type: string}
+                active: {type: boolean, description: false suspends the membership (no sign-in to the tenant); true lifts it.}
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Member"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Members]
+      summary: Remove a member
+      operationId: removeMember
+      responses:
+        "204": {description: Removed.}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/usage:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Usage]
+      summary: Metered usage and limits
+      operationId: getUsage
+      responses:
+        "200":
+          description: One item per metric that has usage or a limit.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/UsageItem"}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/usage/{metric}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: metric, in: path, required: true, schema: {type: string, pattern: "^[a-z0-9][a-z0-9_.:-]{0,63}$"}}
+    post:
+      tags: [Usage]
+      summary: Record usage
+      description: |
+        Atomically adds `delta` (negative releases quota) to the metric's current period
+        (`usage.metrics.<metric>.period`: day, month, year or never). With the default
+        `block` policy, an increment that would exceed
+        the tenant's limit is refused with 429 and emits `tenant.quota_exceeded`; with `allow`
+        it is recorded and `overage` is true. Crossing a configured threshold emits
+        `tenant.usage_threshold_reached`.
+        Only active tenants can consume quota.
+      operationId: recordUsage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [delta]
+              properties: {delta: {type: integer, format: int64}}
+      responses:
+        "200":
+          description: New value.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UsageItem"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/usage/{metric}/grants:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: metric, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [Usage]
+      summary: Reserve a share of a limit
+      description: |
+        For regional cells far from the control plane: the amount is recorded as used now (the
+        limit is enforced, so 429 `quota_exceeded` means it is reached), the cell spends it
+        locally, and releases the grant with what it actually used. A grant not released before
+        it expires stays counted in full. Needs `usage:write`.
+      operationId: reserveUsage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, ttl_seconds]
+              properties:
+                amount: {type: integer, format: int64, minimum: 1}
+                ttl_seconds: {type: integer, minimum: 1, maximum: 86400}
+                holder: {type: string, description: Who holds it, e.g. a region.}
+      responses:
+        "201":
+          description: The grant.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UsageGrant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/usage/{metric}/grants/{grant}/release:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: metric, in: path, required: true, schema: {type: string}}
+      - {name: grant, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [Usage]
+      summary: Release a grant
+      description: Gives back `amount - used`. 410 `grant_gone` if it was already released, has expired or its usage period has ended (nothing is given back then).
+      operationId: releaseUsage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [used]
+              properties:
+                used: {type: integer, format: int64, minimum: 0}
+      responses:
+        "200":
+          description: The released grant.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UsageGrant"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenants/{id}/usage/{metric}/history:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: metric, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Usage]
+      summary: Counters of past and current periods
+      operationId: usageHistory
+      parameters: [{name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 366, default: 12}}]
+      responses:
+        "200":
+          description: Newest period first. `closed_at` is set once `tenant.usage_period_closed` was emitted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tenant_id: {type: string}
+                        metric: {type: string}
+                        period: {type: string}
+                        value: {type: integer, format: int64}
+                        period_end: {type: string, format: date-time}
+                        closed_at: {type: string, format: date-time}
+                        updated_at: {type: string, format: date-time}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/plans:
+    get:
+      tags: [Plans]
+      summary: List plans
+      operationId: listPlans
+      responses:
+        "200":
+          description: All plans.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Plan"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Plans]
+      summary: Create a plan
+      operationId: createPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlanCreate"}
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Plan"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/plans/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [Plans]
+      summary: Get a plan
+      operationId: getPlan
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Plan"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [Plans]
+      summary: Update a plan
+      operationId: updatePlan
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                description: {type: string}
+                features: {$ref: "#/components/schemas/Features"}
+                limits: {$ref: "#/components/schemas/Limits"}
+                grandfather: {type: boolean, description: Pin the tenants currently on the plan to its current revision so the change only affects new subscribers.}
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Plan"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Plans]
+      summary: Delete an unused plan
+      operationId: deletePlan
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenant-templates:
+    get:
+      tags: [Tenants]
+      summary: List tenant templates
+      operationId: listTenantTemplates
+      responses:
+        "200":
+          description: Templates.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/TenantTemplate"}}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/tenant-templates/{template}:
+    parameters: [{name: template, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [Tenants]
+      summary: Get a tenant template
+      operationId: getTenantTemplate
+      responses:
+        "200":
+          description: The template.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TenantTemplate"}
+        default: {$ref: "#/components/responses/Error"}
+    put:
+      tags: [Tenants]
+      summary: Create or replace a tenant template
+      description: Needs `plans:write` (platform-only). Create tenants from it with `template` in the create request.
+      operationId: putTenantTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TenantTemplate"}
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TenantTemplate"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Tenants]
+      summary: Delete a tenant template
+      operationId: deleteTenantTemplate
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/plans/{id}/revisions:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [Plans]
+      summary: List plan revisions
+      description: Snapshots of the plan's features and limits, one per version, newest first.
+      operationId: listPlanRevisions
+      responses:
+        "200":
+          description: Revisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/PlanRevision"}}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/regions:
+    get:
+      tags: [Tenants]
+      summary: List allowed regions
+      description: The configured `tenants.regions`; empty when any region (or none) is allowed.
+      operationId: listRegions
+      responses:
+        "200":
+          description: Regions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/rollouts:
+    get:
+      tags: [Rollouts]
+      summary: List feature rollouts
+      description: Platform-only (`plans:write`), since rollouts name tenant IDs.
+      operationId: listRollouts
+      responses:
+        "200":
+          description: Rollouts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Rollout"}}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/rollouts/{feature}:
+    parameters: [{name: feature, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [Rollouts]
+      summary: Get a feature rollout
+      operationId: getRollout
+      responses:
+        "200":
+          description: The rollout.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Rollout"}
+        default: {$ref: "#/components/responses/Error"}
+    put:
+      tags: [Rollouts]
+      summary: Create or replace a feature rollout
+      description: |
+        Turns the feature on for a stable percentage of the matching tenants (by plan, labels
+        and region), plus `include`, minus `exclude`. Tenants' own feature overrides win.
+        Set `enabled: false` to switch it off at once.
+      operationId: putRollout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Rollout"}
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Rollout"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Rollouts]
+      summary: Delete a feature rollout
+      operationId: deleteRollout
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/events:
+    get:
+      tags: [Events]
+      summary: Read the event log
+      description: |
+        Pages through the event log in sequence order. Filters are applied per page, so a
+        page can hold fewer than `limit` items; follow `next` until it is absent.
+      operationId: listEvents
+      parameters:
+        - {name: after, in: query, description: Sequence number to start after., schema: {type: integer, format: int64}}
+        - {name: tenant_id, in: query, schema: {type: string}}
+        - {name: type, in: query, description: "Glob on event type, e.g. `tenant.*`.", schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+      responses:
+        "200":
+          description: Events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Event"}}
+                  next: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/actions:
+    get:
+      tags: [Roles]
+      summary: Every built-in action (for building custom roles)
+      operationId: listActions
+      responses:
+        "200":
+          description: Actions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/oauth-clients:
+    get:
+      tags: [OpenID provider]
+      summary: List OAuth clients
+      operationId: listOAuthClients
+      responses:
+        "200":
+          description: Clients.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/OAuthClient"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [OpenID provider]
+      summary: Register an application
+      description: |
+        Apps sign users in through Tenarium (`/oauth/authorize`, authorization code + PKCE).
+        Confidential clients get a `client_secret`, shown once; `public: true` clients (SPAs,
+        mobile apps) get none and must use PKCE. Redirect URIs must be https, loopback http, or
+        a private-use scheme. Platform-only (`oauthclients:write`).
+      operationId: createOAuthClient
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OAuthClientInput"}
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client: {$ref: "#/components/schemas/OAuthClient"}
+                  client_secret: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/oauth-clients/{client}:
+    parameters: [{name: client, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [OpenID provider]
+      summary: Get an OAuth client
+      operationId: getOAuthClient
+      responses:
+        "200":
+          description: The client.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OAuthClient"}
+        default: {$ref: "#/components/responses/Error"}
+    put:
+      tags: [OpenID provider]
+      summary: Update an OAuth client
+      operationId: updateOAuthClient
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OAuthClientInput"}
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OAuthClient"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [OpenID provider]
+      summary: Delete an OAuth client and its consents
+      operationId: deleteOAuthClient
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/oauth-clients/{client}/rotate-secret:
+    parameters: [{name: client, in: path, required: true, schema: {type: string}}]
+    post:
+      tags: [OpenID provider]
+      summary: Replace a confidential client's secret
+      operationId: rotateOAuthClientSecret
+      responses:
+        "200":
+          description: The new secret, shown once.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {client_secret: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/event-schemas:
+    get:
+      tags: [Events]
+      summary: JSON Schemas of every event type
+      description: |
+        The schema registry: one JSON Schema (2020-12) per event type and version for the
+        event `data`, plus the CloudEvents `envelope`. Additive changes keep the version;
+        breaking changes publish a new version next to the old one.
+      operationId: listEventSchemas
+      responses:
+        "200":
+          description: Schemas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/EventSchema"}}
+                  envelope: {type: object}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/event-schemas/{type}:
+    parameters: [{name: type, in: path, required: true, schema: {type: string}, example: tenant.created}]
+    get:
+      tags: [Events]
+      summary: Latest schema of an event type
+      operationId: getEventSchema
+      responses:
+        "200":
+          description: The schema.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EventSchema"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/event-schemas/{type}/{version}:
+    parameters:
+      - {name: type, in: path, required: true, schema: {type: string}}
+      - {name: version, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Events]
+      summary: A specific version of an event schema
+      operationId: getEventSchemaVersion
+      responses:
+        "200":
+          description: The schema.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EventSchema"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/audit:
+    get:
+      tags: [Events]
+      summary: Query the audit trail
+      description: |
+        Every change is an event carrying its `actor`, so the event log is the audit trail.
+        Results are newest first and filtered server-side; pass `next` as `before` for the
+        following page. Tenant-scoped callers without `tenant_id` get their own tenant's
+        trail. Events removed by `events.retention` are no longer returned.
+      operationId: listAudit
+      parameters:
+        - {name: tenant_id, in: query, description: Tenant ID or slug., schema: {type: string}}
+        - $ref: "#/components/parameters/AuditActor"
+        - $ref: "#/components/parameters/AuditType"
+        - $ref: "#/components/parameters/AuditSince"
+        - $ref: "#/components/parameters/AuditUntil"
+        - $ref: "#/components/parameters/AuditBefore"
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+      responses:
+        "200": {$ref: "#/components/responses/AuditPage"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/audit:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Events]
+      summary: Query a tenant's audit trail
+      description: Like `/v1/audit` for one tenant; requires `events:read` on it.
+      operationId: listTenantAudit
+      parameters:
+        - $ref: "#/components/parameters/AuditActor"
+        - $ref: "#/components/parameters/AuditType"
+        - $ref: "#/components/parameters/AuditSince"
+        - $ref: "#/components/parameters/AuditUntil"
+        - $ref: "#/components/parameters/AuditBefore"
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+      responses:
+        "200": {$ref: "#/components/responses/AuditPage"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/signing-keys:
+    get:
+      tags: [Auth]
+      summary: List token signing keys
+      description: |
+        Public parts are served at `/.well-known/jwks.json`. Platform-only
+        (`signingkeys:read`). 404 if Tenarium tokens are disabled.
+      operationId: listSigningKeys
+      responses:
+        "200":
+          description: Keys, oldest first; the last one is active.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/SigningKey"}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/signing-keys/rotate:
+    post:
+      tags: [Auth]
+      summary: Rotate the signing key
+      description: |
+        Adds a key that signs new tokens from now on. Older keys keep verifying until
+        every token they signed has expired, then they are retired automatically.
+        Emits `signing_key.rotated`. Platform-only (`signingkeys:write`).
+      operationId: rotateSigningKey
+      responses:
+        "201":
+          description: The new active key.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SigningKey"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/signing-keys/{kid}:
+    parameters: [{name: kid, in: path, required: true, schema: {type: string}}]
+    delete:
+      tags: [Auth]
+      summary: Retire a signing key now
+      description: |
+        For leaked keys: tokens it signed stop verifying immediately. The active key cannot
+        be retired (409 `active_key`); rotate first. Emits `signing_key.retired`.
+      operationId: retireSigningKey
+      responses:
+        "204": {description: Retired.}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/events/replay:
+    post:
+      tags: [Events]
+      summary: Replay events by time range
+      description: |
+        Redelivers the stored events of a time range to one subscription, oldest first, without
+        moving its cursor (e.g. after fixing a consumer). The subscription's filter applies;
+        each event is tried once and failures become dead letters. At most 10000 events per
+        call (`truncated` is set; continue from the last one). Events pruned by
+        `events.retention` can only be replayed from an archive (see the `archive` plugin).
+      operationId: replayEvents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscription, since]
+              properties:
+                subscription: {type: string, description: "Subscription name, e.g. `kafka/events`."}
+                since: {type: string, format: date-time}
+                until: {type: string, format: date-time}
+                types: {type: array, items: {type: string}, description: "Exact types or prefixes ending in `*`."}
+                tenant_ids: {type: array, items: {type: string}}
+      responses:
+        "200":
+          description: Outcome.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matched: {type: integer}
+                  delivered: {type: integer}
+                  dead_lettered: {type: integer}
+                  truncated: {type: boolean}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/dead-letters:
+    get:
+      tags: [Operations]
+      summary: List dead-lettered deliveries
+      operationId: listDeadLetters
+      parameters: [{name: subscription, in: query, schema: {type: string}}]
+      responses:
+        "200":
+          description: Dead letters and the subscriptions on this instance.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/DeadLetter"}}
+                  subscriptions: {type: array, items: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/dead-letters/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+    get:
+      tags: [Operations]
+      summary: Get a dead letter
+      operationId: getDeadLetter
+      responses:
+        "200":
+          description: The dead letter.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeadLetter"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Operations]
+      summary: Discard a dead letter
+      operationId: deleteDeadLetter
+      responses:
+        "204": {description: Discarded.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/dead-letters/{id}/replay:
+    parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+    post:
+      tags: [Operations]
+      summary: Redeliver to its subscription
+      description: On success the dead letter is removed; on failure it is kept and 502 is returned.
+      operationId: replayDeadLetter
+      responses:
+        "200": {description: Delivered.}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/admin/reload:
+    post:
+      tags: [Operations]
+      summary: Reload the configuration file
+      description: |
+        Like sending SIGHUP: re-reads the file given with `-config` and applies what can change
+        while running — `log.level` and the configuration of plugin instances that implement
+        `sdk.Reconfigurer` (e.g. `webhook`, `smtp`). Other differences are listed in
+        `restart_required`; rejected changes in `failed` (the old setting stays). Needs the
+        platform-only `config:reload`. 404 when the server was started without a file.
+      operationId: reloadConfig
+      responses:
+        "200":
+          description: What changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  applied: {type: array, items: {type: string}}
+                  restart_required: {type: array, items: {type: string}}
+                  failed: {type: object, additionalProperties: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/plugins:
+    get:
+      tags: [Operations]
+      summary: Loaded plugins and their registrations
+      operationId: listPlugins
+      responses:
+        "200":
+          description: Plugin instances and compiled-in plugin IDs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/PluginInfo"}}
+                  available: {type: array, items: {type: string}}
+  /v1/me:
+    get:
+      tags: [Operations]
+      summary: The authenticated caller
+      operationId: me
+      responses:
+        "200":
+          description: Principal.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Principal"}
+  /v1/me/memberships:
+    get:
+      tags: [Users]
+      summary: The caller's tenant memberships
+      operationId: myMemberships
+      responses:
+        "200":
+          description: Memberships (empty for callers that are not Tenarium users).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Member"}}
+  /v1/me/mfa:
+    get:
+      tags: [Users]
+      summary: Two-factor status of the signed-in user
+      operationId: myMFA
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: {type: boolean}
+                  pending: {type: boolean, description: Enrolled but not confirmed.}
+                  recovery_codes_left: {type: integer}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/mfa/totp:
+    post:
+      tags: [Users]
+      summary: Start TOTP enrollment
+      description: |
+        Returns a new secret and an `otpauth://` URL (show it as a QR code). Nothing changes
+        for login until it is confirmed. 409 if two-factor authentication is already on.
+      operationId: beginTOTP
+      responses:
+        "200":
+          description: Enrollment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: {type: string}
+                  otpauth_url: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/mfa/totp/confirm:
+    post:
+      tags: [Users]
+      summary: Confirm TOTP enrollment
+      description: Enables two-factor login and returns 10 single-use recovery codes, shown only once.
+      operationId: confirmTOTP
+      requestBody: {$ref: "#/components/requestBodies/OTP"}
+      responses:
+        "200": {$ref: "#/components/responses/RecoveryCodes"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/mfa/recovery-codes:
+    post:
+      tags: [Users]
+      summary: Replace the recovery codes
+      operationId: regenerateRecoveryCodes
+      requestBody: {$ref: "#/components/requestBodies/OTP"}
+      responses:
+        "200": {$ref: "#/components/responses/RecoveryCodes"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/mfa/disable:
+    post:
+      tags: [Users]
+      summary: Turn two-factor authentication off
+      operationId: disableMyMFA
+      requestBody: {$ref: "#/components/requestBodies/OTP"}
+      responses:
+        "204": {description: Disabled.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/email:
+    post:
+      tags: [Me]
+      summary: Change my email address
+      description: |
+        Sends a confirmation link to the new address; the address changes when it is followed
+        (`POST /v1/auth/email-change/confirm`), and the old address is notified. Requires the
+        current password. Internal user directory only; not allowed while impersonating.
+      operationId: requestEmailChange
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email}
+                password: {type: string, format: password}
+      responses:
+        "202": {description: Confirmation sent.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/sessions:
+    get:
+      tags: [Me]
+      summary: List my sessions
+      description: Signed-in clients (devices and browsers), most recently used first.
+      operationId: listMySessions
+      responses:
+        "200":
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Session"}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/sessions/{session}:
+    parameters: [{name: session, in: path, required: true, schema: {type: string}}]
+    delete:
+      tags: [Me]
+      summary: Sign out one of my sessions
+      operationId: revokeMySession
+      responses:
+        "204": {description: Revoked.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/passkeys:
+    get:
+      tags: [Users]
+      summary: The signed-in user's passkeys
+      operationId: listPasskeys
+      responses:
+        "200":
+          description: Passkeys.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Passkey"}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/passkeys/register/begin:
+    post:
+      tags: [Users]
+      summary: Start registering a passkey
+      description: |
+        Returns `options` for `navigator.credentials.create()` (decode the base64url fields)
+        and an opaque `ceremony` to send back with the result within 5 minutes.
+      operationId: beginPasskeyRegistration
+      responses:
+        "200": {$ref: "#/components/responses/WebAuthnCeremony"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/passkeys/register/finish:
+    post:
+      tags: [Users]
+      summary: Finish registering a passkey
+      operationId: finishPasskeyRegistration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ceremony, credential]
+              properties:
+                ceremony: {type: string}
+                name: {type: string}
+                credential: {type: object, description: The PublicKeyCredential as JSON (base64url fields).}
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Passkey"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/passkeys/{passkey}:
+    parameters: [{name: passkey, in: path, required: true, schema: {type: string}}]
+    delete:
+      tags: [Users]
+      summary: Remove a passkey
+      operationId: deletePasskey
+      responses:
+        "204": {description: Removed.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/export:
+    get:
+      tags: [Privacy]
+      summary: Export the signed-in user's data
+      operationId: exportMe
+      responses:
+        "200": {$ref: "#/components/responses/Export"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/impersonation-consent:
+    post:
+      tags: [Users]
+      summary: Allow support to act as me
+      description: Returns a single-use consent code (default validity 1h, at most 24h) to give to support.
+      operationId: grantImpersonationConsent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {ttl: {type: string}}
+      responses:
+        "201":
+          description: Consent code.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: {type: string}
+                  expires_at: {type: string, format: date-time}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/me/password:
+    post:
+      tags: [Users]
+      summary: Change the caller's password
+      operationId: changeMyPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string, format: password}
+                new_password: {type: string, format: password}
+      responses:
+        "204": {description: Changed; all sessions are signed out.}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/users:
+    get:
+      tags: [Users]
+      summary: List users
+      operationId: listUsers
+      parameters:
+        - {name: q, in: query, description: Search in email and name., schema: {type: string}}
+        - {name: status, in: query, schema: {type: string, enum: [invited, active, disabled]}}
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of users.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/User"}}
+                  next: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Users]
+      summary: Create or invite a user
+      description: |
+        Without a password the user is `invited` and receives a setup email (from the user
+        directory if it sends its own, otherwise through the configured mailer).
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UserCreate"}
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}:
+    parameters: [{$ref: "#/components/parameters/UserID"}]
+    get:
+      tags: [Users]
+      summary: Get a user
+      operationId: getUser
+      responses:
+        "200":
+          description: The user.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      tags: [Users]
+      summary: Update a user
+      operationId: updateUser
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: {type: string, format: email}
+                name: {type: string}
+                roles: {type: array, items: {type: string}}
+                attributes: {type: object, additionalProperties: {type: string}}
+                email_verified: {type: boolean}
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [Users]
+      summary: Delete a user and all their memberships
+      operationId: deleteUser
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/disable:
+    parameters: [{$ref: "#/components/parameters/UserID"}]
+    post:
+      tags: [Users]
+      summary: Disable sign-in (takes effect immediately, sessions revoked)
+      operationId: disableUser
+      responses:
+        "200":
+          description: Disabled.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/enable:
+    parameters: [{$ref: "#/components/parameters/UserID"}]
+    post:
+      tags: [Users]
+      summary: Re-enable a disabled user
+      operationId: enableUser
+      responses:
+        "200":
+          description: Enabled.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/password:
+    parameters: [{$ref: "#/components/parameters/UserID"}]
+    post:
+      tags: [Users]
+      summary: Set a user's password (administrators)
+      operationId: setUserPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties: {password: {type: string, format: password}}
+      responses:
+        "204": {description: Set; an invited user becomes active.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/invitation:
+    parameters: [{$ref: "#/components/parameters/UserID"}]
+    post:
+      tags: [Users]
+      summary: Resend the invitation email
+      operationId: resendInvitation
+      responses:
+        "202": {description: Sent.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/sessions:
+    parameters: [{$ref: "#/components/parameters/UserID"}]
+    delete:
+      tags: [Users]
+      summary: Sign the user out everywhere (revoke refresh tokens)
+      operationId: revokeSessions
+      responses:
+        "204": {description: Revoked.}
+        default: {$ref: "#/components/responses/Error"}
+    get:
+      tags: [Users]
+      summary: List a user's sessions
+      description: Signed-in clients (refresh token families), most recently used first. Requires `users:read`.
+      operationId: listUserSessions
+      responses:
+        "200":
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Session"}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/sessions/{session}:
+    parameters:
+      - $ref: "#/components/parameters/UserID"
+      - {name: session, in: path, required: true, schema: {type: string}}
+    delete:
+      tags: [Users]
+      summary: Revoke one of a user's sessions
+      description: The session can no longer be refreshed; access tokens already issued expire on their own. Requires `users:write`.
+      operationId: revokeUserSession
+      responses:
+        "204": {description: Revoked.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/mfa:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}, description: User ID or email.}]
+    delete:
+      tags: [Users]
+      summary: Reset a user's two-factor authentication
+      description: For users who lost their device. Requires `users:write`.
+      operationId: resetUserMFA
+      responses:
+        "204": {description: Reset.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/export:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}, description: User ID or email.}]
+    get:
+      tags: [Privacy]
+      summary: Export a user's data
+      description: Profile, memberships, two-factor status, passkeys and up to 10,000 events the user caused. Requires `users:read`.
+      operationId: exportUser
+      responses:
+        "200": {$ref: "#/components/responses/Export"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/erase:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}, description: User ID or email.}]
+    post:
+      tags: [Privacy]
+      summary: Erase a user everywhere
+      description: |
+        Deletes the user, all memberships, credentials, sessions, passkeys and the directory
+        entry. With `redact_events`, the user's email and name are replaced by `[erased]` in
+        every event's data (event actors keep the now pseudonymous user ID). Emits
+        `user.erased`. Platform-only (`data:erase`).
+      operationId: eraseUser
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {redact_events: {type: boolean}}
+      responses:
+        "200":
+          description: Erased.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id: {type: string}
+                  erased: {type: boolean}
+                  redacted_events: {type: integer}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/impersonate:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}, description: User ID or email.}]
+    post:
+      tags: [Users]
+      summary: Act as a user (support access)
+      description: |
+        Returns a short-lived, tenant-scoped access token for the user (no refresh token),
+        carrying the caller in the RFC 8693 `act` claim. Every action taken with it is recorded
+        with actor `core/token:<user>;impersonated-by=<caller>`, and the session itself as
+        `user.impersonated`. With `auth.impersonation.require_consent` (default) the user must
+        first create a consent code (`POST /v1/me/impersonation-consent`), which is single
+        use; 403 `consent_required` otherwise. Users with platform roles cannot be
+        impersonated, and impersonated sessions cannot change credentials, export or erase
+        data, create API keys, webhooks or roles, change SSO, or impersonate. Platform-only
+        (`users:impersonate`).
+      operationId: impersonateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, tenant]
+              properties:
+                reason: {type: string}
+                tenant: {type: string}
+                ttl: {type: string, description: "Default 15m, at most auth.impersonation.max_ttl (1h)."}
+                consent_code: {type: string}
+      responses:
+        "200":
+          description: The impersonation token.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TokenPair"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/users/{id}/memberships:
+    parameters: [{$ref: "#/components/parameters/UserID"}]
+    get:
+      tags: [Users]
+      summary: A user's memberships in all tenants
+      operationId: userMemberships
+      responses:
+        "200":
+          description: Memberships.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Member"}}
+        default: {$ref: "#/components/responses/Error"}
+
+  /v1/auth/token:
+    post:
+      tags: [Auth]
+      summary: Sign in or refresh
+      description: |
+        `password` grant: email + password, optionally `tenant` (ID or slug) for a tenant-scoped
+        token whose role is the membership role. Without a tenant the user needs platform roles.
+        `refresh_token` grant: rotates the refresh token; replaying an old one revokes the session.
+        Users with two-factor authentication must also send `otp` (a TOTP or recovery code);
+        without it the response is 401 `mfa_required`, with a wrong one 401 `invalid_otp`.
+        Rate-limited per client IP; repeated failures lock the account temporarily.
+      operationId: token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type: {type: string, enum: [password, refresh_token, magic_link]}
+                token: {type: string, description: Sign-in link token (grant_type magic_link).}
+                email: {type: string, format: email}
+                password: {type: string, format: password}
+                tenant: {type: string}
+                refresh_token: {type: string}
+                otp: {type: string, description: TOTP or recovery code (two-factor users).}
+      responses:
+        "200":
+          description: Tokens.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TokenPair"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/sso/start:
+    get:
+      tags: [SSO]
+      summary: Start single sign-on (browser)
+      description: |
+        Redirects to the provider of `tenant` or, without it, of `email`'s domain (passed on
+        as `login_hint`). After sign-in the browser returns to `return_to` (default
+        `<public_url>/ui/`; other origins must be in `auth.sso.allowed_redirects`) with
+        `access_token`, `refresh_token`, `token_type`, `expires_in` and `tenant_id` in the
+        URL fragment, or `error` (`sso_rejected`, `idp_error`, `sso_failed`). Sessions are
+        always scoped to the tenant; new users and memberships are created only with
+        `auto_provision`.
+      operationId: ssoStart
+      security: []
+      parameters:
+        - {name: tenant, in: query, schema: {type: string}}
+        - {name: email, in: query, schema: {type: string}}
+        - {name: return_to, in: query, schema: {type: string, format: uri}}
+      responses:
+        "302": {description: Redirect to the identity provider.}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/sso/callback:
+    get:
+      tags: [SSO]
+      summary: Provider callback (browser)
+      operationId: ssoCallback
+      security: []
+      responses:
+        "302": {description: Back to return_to with the session or an error in the fragment.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/sso/discover:
+    get:
+      tags: [SSO]
+      summary: Does this email sign in with SSO?
+      description: For login forms deciding between password and SSO.
+      operationId: ssoDiscover
+      security: []
+      parameters: [{name: email, in: query, required: true, schema: {type: string}}]
+      responses:
+        "200":
+          description: Result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sso: {type: boolean}
+                  enforced: {type: boolean}
+                  tenant: {type: string, description: Tenant slug.}
+  /v1/auth/passkey/begin:
+    post:
+      tags: [Auth]
+      summary: Start a passkey sign-in
+      description: |
+        Without `email` the browser may offer any passkey for this site (discoverable
+        credentials). Unknown emails get the same answer as known ones.
+      operationId: beginPasskeyLogin
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {email: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/WebAuthnCeremony"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/passkey/finish:
+    post:
+      tags: [Auth]
+      summary: Finish a passkey sign-in
+      description: |
+        Verifies the assertion and returns tokens (tenant-scoped with `tenant`). A passkey is a
+        strong factor, so no one-time code is asked; SSO enforcement applies as for passwords.
+        401 `passkey_rejected` on failure.
+      operationId: finishPasskeyLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ceremony, credential]
+              properties:
+                ceremony: {type: string}
+                credential: {type: object}
+                tenant: {type: string}
+      responses:
+        "200":
+          description: Tokens.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TokenPair"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/sso/saml/{tenant}/metadata:
+    parameters: [{name: tenant, in: path, required: true, schema: {type: string}, description: Tenant ID.}]
+    get:
+      tags: [SSO]
+      summary: SAML service provider metadata of a tenant
+      description: Give this URL (it is also the SP entity ID) to the identity provider.
+      operationId: samlMetadata
+      security: []
+      responses:
+        "200":
+          description: SP metadata.
+          content:
+            application/samlmetadata+xml:
+              schema: {type: string}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/auth/sso/saml/{tenant}/acs:
+    parameters: [{name: tenant, in: path, required: true, schema: {type: string}, description: Tenant ID.}]
+    post:
+      tags: [SSO]
+      summary: SAML assertion consumer service (HTTP-POST binding)
+      description: |
+        The identity provider posts the signed response here; the browser then returns to
+        `return_to` with the session or an error in the fragment, as for OIDC. Only
+        SP-initiated sign-in (via `/v1/auth/sso/start`) is accepted.
+      operationId: samlACS
+      security: []
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                SAMLResponse: {type: string}
+                RelayState: {type: string}
+      responses:
+        "302": {description: Back to return_to.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke a session
+      operationId: logout
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties: {refresh_token: {type: string}}
+      responses:
+        "204": {description: Revoked.}
+  /v1/auth/magic-link:
+    post:
+      tags: [Auth]
+      summary: Email a sign-in link
+      description: |
+        Passwordless sign-in (enabled with `users.magic_link_ttl`). Answers 202 whether or not
+        the address is known. The link opens `/ui/#/magic/{token}`; exchange the token at
+        `POST /v1/auth/token` with `grant_type: magic_link` (plus `otp` for two-factor users;
+        without it the link stays valid and `mfa_required` is returned). Links are single-use.
+      operationId: requestMagicLink
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: {type: string, format: email}
+                tenant: {type: string, description: Tenant ID or slug to sign in to.}
+      responses:
+        "202": {description: Sent if the account exists.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/email-change/confirm:
+    post:
+      tags: [Auth]
+      summary: Confirm an email change
+      description: Completes `POST /v1/me/email` with the token from the confirmation link.
+      operationId: confirmEmailChange
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: {type: string}
+      responses:
+        "200":
+          description: The updated user.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/User"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/social:
+    get:
+      tags: [Auth]
+      summary: List social login providers
+      description: Providers configured under `auth.social.providers` (no secrets). Absent when none are configured.
+      operationId: listSocialProviders
+      security: []
+      responses:
+        "200":
+          description: Providers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: {type: string}
+                        label: {type: string}
+                        type: {type: string, enum: [google, github, microsoft, oidc]}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/social/{provider}/start:
+    parameters: [{name: provider, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [Auth]
+      summary: Start a social login
+      description: |
+        Redirects the browser to the provider (PKCE, signed state cookie). After the callback the
+        browser returns to `return_to` (default `/ui/`) with the session in the URL fragment, like
+        tenant SSO, or with `error=` (`access_denied`, `sso_required`, `mfa_required`,
+        `tenant_required`, `account_locked`, `email_unverified`, `domain_not_allowed`, `idp_error`).
+        Users with two-factor authentication get `mfa_required` and sign in with password and code.
+      operationId: startSocialLogin
+      security: []
+      parameters:
+        - {name: tenant, in: query, schema: {type: string}, description: Tenant ID or slug to sign in to.}
+        - {name: return_to, in: query, schema: {type: string, format: uri}}
+      responses:
+        "302": {description: Redirect to the provider.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/social/{provider}/callback:
+    parameters: [{name: provider, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [Auth]
+      summary: Social login callback
+      description: The redirect URI to register at the provider.
+      operationId: socialLoginCallback
+      security: []
+      responses:
+        "302": {description: Redirect back to the application.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/branding:
+    get:
+      tags: [Auth]
+      summary: Tenant branding for sign-in pages
+      description: Unauthenticated. 404 for unknown tenants and tenants without branding.
+      operationId: getPublicBranding
+      security: []
+      parameters:
+        - {name: tenant, in: query, schema: {type: string}, description: Tenant ID or slug.}
+        - {name: host, in: query, schema: {type: string}, description: A verified custom domain of the tenant.}
+      responses:
+        "200":
+          description: Branding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: "#/components/schemas/Branding"}
+                  - type: object
+                    properties:
+                      tenant_id: {type: string}
+                      slug: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/password-reset:
+    post:
+      tags: [Auth]
+      summary: Request a password reset email
+      description: Always 202, so the response does not reveal whether the email is registered.
+      operationId: requestPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: {email: {type: string, format: email}}
+      responses:
+        "202": {description: Accepted.}
+  /v1/auth/password-reset/confirm:
+    post:
+      tags: [Auth]
+      summary: Set a new password with a reset token
+      operationId: confirmPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: {type: string}
+                password: {type: string, format: password}
+      responses:
+        "204": {description: Password changed; all sessions are signed out.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/auth/invitations/accept:
+    post:
+      tags: [Auth]
+      summary: Accept an invitation by choosing a password
+      operationId: acceptInvitation
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: {type: string}
+                password: {type: string, format: password}
+                name: {type: string}
+      responses:
+        "200": {description: The user is active and pending memberships are activated.}
+        default: {$ref: "#/components/responses/Error"}
+  /.well-known/openid-configuration:
+    get:
+      tags: [Auth]
+      summary: OpenID Provider metadata for Tenarium-issued tokens
+      security: []
+      responses:
+        "200": {description: Discovery document.}
+  /.well-known/jwks.json:
+    get:
+      tags: [Auth]
+      summary: Public keys that sign Tenarium tokens
+      security: []
+      responses:
+        "200": {description: JSON Web Key Set.}
+  /v1/tenants/{id}/api-keys:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [API keys]
+      summary: List a tenant's API keys
+      operationId: listTenantAPIKeys
+      responses:
+        "200":
+          description: Keys (secrets are never returned again).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/APIKey"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [API keys]
+      summary: Create a tenant API key
+      description: |
+        Returns the secret once, in `key`. Roles are member roles; a tenant-scoped caller can only
+        grant roles it holds itself. Keys of tenants that are not active stop working.
+      operationId: createTenantAPIKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/APIKeyCreate"}
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CreatedAPIKey"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/api-keys/{key}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: key, in: path, required: true, description: Key ID., schema: {type: string}}
+    delete:
+      tags: [API keys]
+      summary: Revoke a tenant API key
+      operationId: revokeTenantAPIKey
+      responses:
+        "204": {description: Revoked.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/api-keys:
+    get:
+      tags: [API keys]
+      summary: List platform API keys
+      operationId: listPlatformAPIKeys
+      responses:
+        "200":
+          description: Keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/APIKey"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [API keys]
+      summary: Create a platform API key
+      operationId: createPlatformAPIKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/APIKeyCreate"}
+      responses:
+        "201":
+          description: Created; the secret is in `key`.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CreatedAPIKey"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/api-keys/{key}:
+    parameters: [{name: key, in: path, required: true, schema: {type: string}}]
+    delete:
+      tags: [API keys]
+      summary: Revoke a platform API key
+      operationId: revokePlatformAPIKey
+      responses:
+        "204": {description: Revoked.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/domains:
+    parameters: [{$ref: "#/components/parameters/TenantID"}]
+    get:
+      tags: [Domains]
+      summary: List a tenant's custom domains
+      operationId: listDomains
+      responses:
+        "200":
+          description: Domains.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Domain"}}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      tags: [Domains]
+      summary: Add a custom domain
+      description: |
+        Returns the TXT record to publish (`_tenarium-challenge.<hostname>`) before verifying.
+        Hostnames are unique across tenants; `tenants.reserved_domains` and their subdomains
+        cannot be claimed.
+      operationId: addDomain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hostname]
+              properties: {hostname: {type: string, examples: [app.acme.com]}}
+      responses:
+        "201":
+          description: Added (unverified).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domain: {$ref: "#/components/schemas/Domain"}
+                  instructions:
+                    type: object
+                    properties:
+                      type: {type: string, enum: [TXT]}
+                      name: {type: string}
+                      value: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/domains/{hostname}/verify:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: hostname, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [Domains]
+      summary: Check the TXT record and mark the domain verified
+      operationId: verifyDomain
+      responses:
+        "200":
+          description: Verified.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Domain"}
+        "422": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/domains/{hostname}/certificate:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: hostname, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Domains]
+      summary: Managed certificate status
+      description: With `server.tls.acme` enabled, Tenarium issues certificates for verified domains on first use; this shows the current one. 404 when ACME is off.
+      operationId: domainCertificate
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hostname: {type: string}
+                  issued: {type: boolean}
+                  certificate:
+                    type: object
+                    properties:
+                      issuer: {type: string}
+                      not_before: {type: string, format: date-time}
+                      not_after: {type: string, format: date-time}
+                      dns_names: {type: array, items: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/tenants/{id}/domains/{hostname}:
+    parameters:
+      - $ref: "#/components/parameters/TenantID"
+      - {name: hostname, in: path, required: true, schema: {type: string}}
+    delete:
+      tags: [Domains]
+      summary: Remove a custom domain
+      operationId: removeDomain
+      responses:
+        "204": {description: Removed.}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/domains/resolve:
+    get:
+      tags: [Domains]
+      summary: Find the tenant of a verified hostname
+      description: For gateways and application middleware (platform callers).
+      operationId: resolveDomain
+      parameters: [{name: host, in: query, required: true, schema: {type: string}}]
+      responses:
+        "200":
+          description: The tenant.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant_id: {type: string}
+                  slug: {type: string}
+                  hostname: {type: string}
+                  region: {type: string, description: "The tenant's region, when set: route to its cell without another lookup."}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/domains/check:
+    get:
+      tags: [Domains]
+      summary: On-demand TLS permission check
+      description: |
+        Unauthenticated. 200 if a certificate may be issued for the domain (verified, tenant
+        live), else 404. Point Caddy's `on_demand_tls { ask ... }` here.
+      operationId: checkDomain
+      security: []
+      parameters: [{name: domain, in: query, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Allowed.}
+        "404": {description: Unknown or unverified.}
+  /healthz:
+    get:
+      tags: [Operations]
+      summary: Liveness
+      security: []
+      responses:
+        "200": {description: Process is up.}
+  /readyz:
+    get:
+      tags: [Operations]
+      summary: Readiness (store and plugin health)
+      security: []
+      responses:
+        "200": {description: Ready.}
+        "503": {description: A dependency is unhealthy.}
+  /metrics:
+    get:
+      tags: [Operations]
+      summary: Prometheus metrics
+      security: []
+      responses:
+        "200": {description: Metrics in Prometheus text format.}
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: API key or OIDC access token.
+    basic:
+      type: http
+      scheme: basic
+      description: LDAP credentials (ldap plugin).
+
+  parameters:
+    AuditActor:
+      {name: actor, in: query, description: "Exact actor, e.g. `core/token:<user id>` or `system:scheduler`.", schema: {type: string}}
+    AuditType:
+      name: type
+      in: query
+      description: Event type, or prefix ending in `*` (`tenant.*`). Repeat for several.
+      schema: {type: array, items: {type: string}}
+      explode: true
+    AuditSince:
+      {name: since, in: query, description: Inclusive lower time bound., schema: {type: string, format: date-time}}
+    AuditUntil:
+      {name: until, in: query, description: Exclusive upper time bound., schema: {type: string, format: date-time}}
+    AuditBefore:
+      {name: before, in: query, description: Only events with a lower sequence number (paging)., schema: {type: integer, format: int64}}
+    TenantID:
+      name: id
+      in: path
+      required: true
+      description: Tenant ID or slug.
+      schema: {type: string}
+    After:
+      name: after
+      in: query
+      description: Exclusive cursor (the `next` value of the previous page).
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 500, default: 50}
+    IfMatch:
+      name: If-Match
+      in: header
+      description: Expected version (the ETag), e.g. `"3"`.
+      schema: {type: string}
+    UserID:
+      name: id
+      in: path
+      required: true
+      description: User ID or email.
+      schema: {type: string}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: {type: string, maxLength: 255}
+
+  headers:
+    ETag:
+      description: Resource version, for `If-Match`.
+      schema: {type: string}
+
+  requestBodies:
+    SCIM:
+      required: true
+      content:
+        application/scim+json:
+          schema: {type: object}
+        application/json:
+          schema: {type: object}
+    OTP:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: {type: string, description: Current TOTP code (or a recovery code where accepted).}
+  responses:
+    Export:
+      description: A JSON data export (sent as an attachment).
+      content:
+        application/json:
+          schema: {type: object}
+    WebAuthnCeremony:
+      description: WebAuthn options and the ceremony token.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              options: {type: object, description: '{"publicKey": ...} for navigator.credentials.create() or get().'}
+              ceremony: {type: string}
+    SCIM:
+      description: A SCIM resource or ListResponse (RFC 7644).
+      content:
+        application/scim+json:
+          schema: {type: object}
+    SCIMError:
+      description: A SCIM error (`urn:ietf:params:scim:api:messages:2.0:Error`), or a Tenarium error for authentication failures.
+      content:
+        application/scim+json:
+          schema:
+            type: object
+            properties:
+              schemas: {type: array, items: {type: string}}
+              status: {type: string}
+              scimType: {type: string}
+              detail: {type: string}
+    RecoveryCodes:
+      description: Single-use recovery codes; store them safely.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              recovery_codes: {type: array, items: {type: string}}
+    AuditPage:
+      description: Events, newest first.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [items]
+            properties:
+              items: {type: array, items: {$ref: "#/components/schemas/Event"}}
+              next: {type: string, description: Pass as `before` for the next page.}
+    Tenant:
+      description: The tenant after the transition.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Tenant"}
+    Error:
+      description: |
+        400 validation_failed · 401 unauthorized · 403 forbidden · 404 not_found ·
+        409 already_exists / invalid_transition · 412 version_conflict ·
+        422 rejected (plugin hook) / idempotency_key_reused · 429 quota_exceeded · 500 internal
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            field: {type: string}
+
+    TenantStatus:
+      type: string
+      enum: [provisioning, active, suspended, failed, deleting, deleted]
+
+    Labels:
+      type: object
+      additionalProperties: {type: string, maxLength: 256}
+    Features:
+      type: object
+      additionalProperties: {type: boolean}
+    Limits:
+      type: object
+      additionalProperties: {type: integer, format: int64, minimum: 0}
+
+    Tenant:
+      type: object
+      required: [id, slug, name, status, version, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        slug: {type: string, pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"}
+        name: {type: string, maxLength: 200}
+        parent_id: {type: string, format: uuid}
+        status: {$ref: "#/components/schemas/TenantStatus"}
+        status_reason: {type: string}
+        plan: {type: string}
+        labels: {$ref: "#/components/schemas/Labels"}
+        settings: {type: object}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+        plan_revision: {type: integer, format: int64, description: Plan revision the tenant is pinned to (grandfathered); absent when it follows the current plan.}
+        add_ons: {type: array, items: {type: string}, description: Plan IDs whose features and limits stack on the plan.}
+        region: {type: string}
+        billing_anchor: {type: string, format: date-time, description: Start of the monthly billing cycles for `cycle` usage periods; absent means the creation time.}
+        branding: {$ref: "#/components/schemas/Branding"}
+        maintenance: {$ref: "#/components/schemas/Maintenance"}
+        version: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        deleted_at: {type: string, format: date-time}
+    TenantCreate:
+      type: object
+      required: [slug, name]
+      properties:
+        slug: {type: string}
+        name: {type: string}
+        parent_id: {type: string, description: Parent tenant ID or slug.}
+        plan: {type: string}
+        labels: {$ref: "#/components/schemas/Labels"}
+        settings: {type: object}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+        add_ons: {type: array, items: {type: string}, description: "Add-on plan IDs; like plan, needs `plans:write`."}
+        region: {type: string, description: "Defaults to the parent's region, then to `tenants.default_region`."}
+        branding: {$ref: "#/components/schemas/Branding"}
+        template: {type: string, description: "Tenant template whose values are defaults for this request (see /v1/tenant-templates)."}
+        schedule:
+          type: array
+          description: Actions to schedule with the tenant, e.g. the end of a trial.
+          items: {$ref: "#/components/schemas/ScheduleInput"}
+    TenantUpdate:
+      type: object
+      properties:
+        name: {type: string}
+        plan: {type: string}
+        labels: {$ref: "#/components/schemas/Labels"}
+        settings: {type: object, description: JSON merge patch.}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+        add_ons: {type: array, items: {type: string}, description: "Replaces the add-ons; needs `plans:write`."}
+        billing_anchor: {type: string, format: date-time, description: "Billing cycle anchor for `cycle` usage periods; needs `plans:write`."}
+        clear_billing_anchor: {type: boolean, description: "Remove the billing anchor (cycles start at the creation time again); needs `plans:write`."}
+        branding: {$ref: "#/components/schemas/Branding", description: Replaces the branding; an empty object removes it.}
+    TenantPage:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Tenant"}}
+        next: {type: string, description: Cursor for the next page; absent on the last page.}
+
+    Entitlements:
+      type: object
+      required: [tenant_id, features, limits]
+      properties:
+        tenant_id: {type: string}
+        plan: {type: string}
+        plan_revision: {type: integer, format: int64}
+        add_ons: {type: array, items: {type: string}}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+
+    Plan:
+      type: object
+      required: [id, name, version, created_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        description: {type: string}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+        version: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    PlanCreate:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string, pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"}
+        name: {type: string}
+        description: {type: string}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+
+    PlanRevision:
+      type: object
+      required: [plan_id, revision, created_at]
+      properties:
+        plan_id: {type: string}
+        revision: {type: integer, format: int64}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+        created_at: {type: string, format: date-time}
+    Rollout:
+      type: object
+      properties:
+        feature: {type: string, readOnly: true}
+        percentage: {type: integer, minimum: 0, maximum: 100}
+        plans: {type: array, items: {type: string}}
+        labels: {$ref: "#/components/schemas/Labels"}
+        regions: {type: array, items: {type: string}}
+        include: {type: array, items: {type: string}, description: Tenant IDs that always get the feature.}
+        exclude: {type: array, items: {type: string}, description: Tenant IDs that never get it.}
+        enabled: {type: boolean}
+        updated_at: {type: string, format: date-time, readOnly: true}
+
+    Session:
+      type: object
+      required: [id, user_id, created_at, last_used_at, expires_at]
+      properties:
+        id: {type: string}
+        user_id: {type: string}
+        tenant_id: {type: string}
+        user_agent: {type: string}
+        ip: {type: string}
+        created_at: {type: string, format: date-time, description: When the user signed in.}
+        last_used_at: {type: string, format: date-time, description: Last token refresh.}
+        expires_at: {type: string, format: date-time}
+    Branding:
+      type: object
+      properties:
+        display_name: {type: string, maxLength: 200}
+        logo_url: {type: string, format: uri, description: https only.}
+        icon_url: {type: string, format: uri}
+        primary_color: {type: string, pattern: "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"}
+        accent_color: {type: string, pattern: "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"}
+        support_email: {type: string, format: email}
+        support_url: {type: string, format: uri}
+    Maintenance:
+      type: object
+      properties:
+        message: {type: string}
+        started_at: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+    TenantTemplate:
+      type: object
+      properties:
+        id: {type: string, readOnly: true}
+        name: {type: string}
+        description: {type: string}
+        plan: {type: string}
+        add_ons: {type: array, items: {type: string}}
+        region: {type: string}
+        labels: {$ref: "#/components/schemas/Labels"}
+        settings: {type: object}
+        features: {$ref: "#/components/schemas/Features"}
+        limits: {$ref: "#/components/schemas/Limits"}
+        branding: {$ref: "#/components/schemas/Branding"}
+        roles:
+          type: array
+          items:
+            type: object
+            required: [name, actions]
+            properties:
+              name: {type: string}
+              description: {type: string}
+              actions: {type: array, items: {type: string}}
+        updated_at: {type: string, format: date-time, readOnly: true}
+
+    UsageGrant:
+      type: object
+      properties:
+        id: {type: string}
+        tenant_id: {type: string}
+        metric: {type: string}
+        amount: {type: integer, format: int64}
+        period: {type: string}
+        period_end: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        holder: {type: string}
+
+    Member:
+      type: object
+      required: [id, tenant_id, email, role, status, version]
+      properties:
+        id: {type: string, format: uuid}
+        tenant_id: {type: string, format: uuid}
+        user_id: {type: string}
+        email: {type: string, format: email}
+        role: {type: string}
+        status: {type: string, enum: [invited, active, suspended]}
+        invited_by: {type: string}
+        version: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    MemberCreate:
+      type: object
+      required: [email, role]
+      properties:
+        email: {type: string, format: email}
+        role: {type: string}
+        user_id: {type: string}
+
+    UsageItem:
+      type: object
+      required: [metric, value]
+      properties:
+        metric: {type: string}
+        value: {type: integer, format: int64}
+        limit: {type: integer, format: int64, description: Absent means unlimited.}
+        period: {type: string, description: 'Current period, e.g. "2026-10"; absent if the counter never resets.'}
+        period_end: {type: string, format: date-time}
+        overage: {type: boolean, description: Value is above the limit (overage policy "allow").}
+        overage_policy: {type: string, enum: [block, allow]}
+
+    Event:
+      type: object
+      required: [seq, id, type, source, time]
+      properties:
+        seq: {type: integer, format: int64}
+        id: {type: string}
+        type: {type: string, examples: [tenant.created]}
+        source: {type: string}
+        subject: {type: string}
+        tenantid: {type: string}
+        actor: {type: string}
+        time: {type: string, format: date-time}
+        data: {type: object}
+        traceparent: {type: string, description: W3C trace context of the request that caused the event (absent when tracing is off).}
+        tracestate: {type: string}
+        dataschema: {type: string, format: uri, description: "Schema of data: /v1/event-schemas/{type}/{version} (absent for types without a published schema)."}
+    DeadLetter:
+      type: object
+      properties:
+        id: {type: string}
+        subscription: {type: string}
+        event: {$ref: "#/components/schemas/Event"}
+        error: {type: string}
+        attempts: {type: integer}
+        failed_at: {type: string, format: date-time}
+
+    Principal:
+      type: object
+      properties:
+        subject: {type: string}
+        kind: {type: string}
+        authenticator: {type: string}
+        tenant_id: {type: string}
+        roles: {type: array, items: {type: string}}
+        claims: {type: object}
+    User:
+      type: object
+      required: [id, email, status, directory, version]
+      properties:
+        id: {type: string, format: uuid}
+        email: {type: string, format: email}
+        name: {type: string}
+        status: {type: string, enum: [invited, active, disabled]}
+        email_verified: {type: boolean}
+        roles: {type: array, items: {type: string}, description: Platform roles.}
+        directory: {type: string, description: '"internal" or the user directory plugin instance.'}
+        external_id: {type: string}
+        attributes: {type: object, additionalProperties: {type: string}}
+        version: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        last_login_at: {type: string, format: date-time}
+    UserCreate:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string, format: email}
+        name: {type: string}
+        roles: {type: array, items: {type: string}}
+        attributes: {type: object, additionalProperties: {type: string}}
+        password: {type: string, format: password, description: Activates the user immediately.}
+        send_invitation: {type: boolean, default: true}
+    TokenPair:
+      type: object
+      required: [access_token, token_type, expires_in, refresh_token]
+      properties:
+        access_token: {type: string}
+        token_type: {type: string, enum: [Bearer]}
+        expires_in: {type: integer}
+        refresh_token: {type: string}
+        tenant_id: {type: string}
+    APIKey:
+      type: object
+      properties:
+        id: {type: string}
+        tenant_id: {type: string}
+        name: {type: string}
+        prefix: {type: string, description: First characters of the key, to recognize it.}
+        roles: {type: array, items: {type: string}}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+    APIKeyCreate:
+      type: object
+      required: [name, roles]
+      properties:
+        name: {type: string}
+        roles: {type: array, items: {type: string}}
+        expires_in: {type: string, description: Go duration such as 720h; omit for no expiry.}
+    CreatedAPIKey:
+      allOf:
+        - $ref: "#/components/schemas/APIKey"
+        - type: object
+          required: [key]
+          properties:
+            key: {type: string, description: "The secret (tnr_...). Shown only once."}
+    Domain:
+      type: object
+      properties:
+        hostname: {type: string}
+        tenant_id: {type: string}
+        verified: {type: boolean}
+        verification_token: {type: string}
+        created_at: {type: string, format: date-time}
+        verified_at: {type: string, format: date-time}
+    WebhookInput:
+      type: object
+      properties:
+        url: {type: string, format: uri}
+        description: {type: string}
+        types: {type: array, items: {type: string}, description: 'Event type globs, e.g. "tenant.*"; empty means all.'}
+        enabled: {type: boolean}
+    Webhook:
+      type: object
+      properties:
+        id: {type: string}
+        tenant_id: {type: string}
+        url: {type: string}
+        description: {type: string}
+        types: {type: array, items: {type: string}}
+        enabled: {type: boolean}
+        failures: {type: integer, description: Consecutive failed events; the webhook is disabled at webhooks.max_failures.}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    WebhookDelivery:
+      type: object
+      properties:
+        id: {type: string}
+        webhook_id: {type: string}
+        tenant_id: {type: string}
+        event_id: {type: string}
+        event_type: {type: string}
+        payload: {type: object, description: The CloudEvent sent.}
+        attempts: {type: integer}
+        status_code: {type: integer}
+        error: {type: string}
+        success: {type: boolean}
+        duration_ms: {type: integer}
+        created_at: {type: string, format: date-time}
+    SSOInput:
+      type: object
+      required: [domains]
+      description: 'OIDC needs issuer, client_id and client_secret; SAML needs saml_metadata or saml_metadata_url.'
+      properties:
+        protocol: {type: string, enum: [oidc, saml], default: oidc}
+        issuer: {type: string, format: uri}
+        client_id: {type: string}
+        client_secret: {type: string, format: password}
+        domains: {type: array, items: {type: string}}
+        enforce: {type: boolean}
+        auto_provision: {type: boolean}
+        default_role: {type: string, default: member}
+        enabled: {type: boolean, default: true}
+        saml_metadata: {type: string, description: IdP metadata XML.}
+        saml_metadata_url: {type: string, format: uri, description: Fetched once when saved; save again to refresh.}
+        saml_email_attribute: {type: string, description: "Attribute holding the email (default: email, mail, the email claim URI, or an email NameID)."}
+        saml_name_attribute: {type: string}
+    SSOConnection:
+      type: object
+      properties:
+        tenant_id: {type: string}
+        protocol: {type: string, enum: [oidc, saml]}
+        saml_metadata_url: {type: string}
+        saml_email_attribute: {type: string}
+        saml_name_attribute: {type: string}
+        issuer: {type: string}
+        client_id: {type: string}
+        domains: {type: array, items: {type: string}}
+        enforce: {type: boolean}
+        auto_provision: {type: boolean}
+        default_role: {type: string}
+        enabled: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Role:
+      type: object
+      properties:
+        name: {type: string}
+        description: {type: string}
+        actions: {type: array, items: {type: string}}
+        built_in: {type: boolean}
+    GroupInput:
+      type: object
+      properties:
+        name: {type: string}
+        description: {type: string}
+        roles: {type: array, items: {type: string}}
+    Group:
+      type: object
+      properties:
+        id: {type: string}
+        tenant_id: {type: string}
+        name: {type: string}
+        description: {type: string}
+        roles: {type: array, items: {type: string}}
+        members: {type: array, items: {type: string}, description: Member IDs.}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Passkey:
+      type: object
+      properties:
+        id: {type: string}
+        user_id: {type: string}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time}
+    OAuthClientInput:
+      type: object
+      required: [name, redirect_uris]
+      properties:
+        name: {type: string}
+        redirect_uris: {type: array, items: {type: string}}
+        post_logout_redirect_uris: {type: array, items: {type: string}}
+        tenant_id: {type: string, description: Scope every session of this app to one tenant.}
+        scopes: {type: array, items: {type: string, enum: [openid, profile, email, offline_access]}}
+        first_party: {type: boolean, description: Skip the consent screen.}
+        public: {type: boolean, description: No secret; PKCE required.}
+    OAuthClient:
+      type: object
+      properties:
+        client_id: {type: string}
+        name: {type: string}
+        redirect_uris: {type: array, items: {type: string}}
+        post_logout_redirect_uris: {type: array, items: {type: string}}
+        tenant_id: {type: string}
+        scopes: {type: array, items: {type: string}}
+        first_party: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    EventSchema:
+      type: object
+      properties:
+        type: {type: string}
+        version: {type: string}
+        description: {type: string}
+        schema: {type: object}
+    SigningKey:
+      type: object
+      properties:
+        kid: {type: string}
+        alg: {type: string, enum: [ES256]}
+        created_at: {type: string, format: date-time}
+        active: {type: boolean, description: Signs new tokens.}
+    ScheduleInput:
+      type: object
+      required: [action]
+      description: Give exactly one of `at` and `after`.
+      properties:
+        action: {type: string, enum: [suspend, resume, set_plan, delete]}
+        at: {type: string, format: date-time}
+        after: {type: string, description: 'Relative to now: a duration ("36h") or days ("14d").'}
+        plan: {type: string, description: Required for set_plan.}
+        reason: {type: string, description: Suspension reason (suspend).}
+    ScheduledAction:
+      type: object
+      properties:
+        id: {type: string}
+        tenant_id: {type: string}
+        action: {type: string, enum: [suspend, resume, set_plan, delete]}
+        plan: {type: string}
+        reason: {type: string}
+        run_at: {type: string, format: date-time}
+        status: {type: string, enum: [pending, running, done, failed, canceled]}
+        error: {type: string}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+        done_at: {type: string, format: date-time}
+    PluginInfo:
+      type: object
+      properties:
+        name: {type: string}
+        manifest:
+          type: object
+          properties:
+            id: {type: string}
+            name: {type: string}
+            version: {type: string}
+            description: {type: string}
+        scope: {type: object}
+        subscriptions: {type: array, items: {type: string}}
+        hooks: {type: array, items: {type: string}}
+        provisioners: {type: array, items: {type: string}}
+        routes: {type: array, items: {type: string}}
+        authenticators: {type: array, items: {type: string}}
+        authorizers: {type: array, items: {type: string}}

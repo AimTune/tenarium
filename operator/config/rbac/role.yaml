@@ -1,0 +1,61 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenarium-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - tenarium.io
+  resources:
+  - plans
+  - rollouts
+  - tenants
+  - tenanttemplates
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tenarium.io
+  resources:
+  - plans/finalizers
+  - rollouts/finalizers
+  - tenants/finalizers
+  - tenanttemplates/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tenarium.io
+  resources:
+  - plans/status
+  - rollouts/status
+  - tenants/status
+  - tenanttemplates/status
+  - tenariumconnections/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - tenarium.io
+  resources:
+  - tenariumconnections
+  verbs:
+  - get
+  - list
+  - watch

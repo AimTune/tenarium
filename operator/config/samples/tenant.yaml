@@ -1,0 +1,76 @@
+apiVersion: tenarium.io/v1alpha1
+kind: Tenant
+metadata:
+  name: acme
+  namespace: default
+spec:
+  slug: acme
+  name: Acme Inc.
+  plan: pro
+  addOns: [extra-seats]   # plan IDs stacked on the plan; [] removes them
+  region: eu              # set on create; changing it moves the tenant
+  moveReprovision: false  # true: re-run provisioners in the new region
+  billingAnchor: "2026-01-01T00:00:00Z"
+  branding:               # removing it later clears the branding
+    displayName: Acme
+    logoUrl: https://acme.example.com/logo.png
+    primaryColor: "#1a2b3c"
+    supportEmail: support@acme.example.com
+  labels:
+    tier: gold
+  settings:
+    theme: dark
+    notifications:
+      email: true
+  limits:
+    seats: 75          # overrides the plan's limit
+  schedule:
+    - action: set_plan  # end of an upgrade trial
+      plan: free
+      after: 30d
+  deletionPolicy: Delete
+  connectionRef:
+    name: tenarium
+---
+# A child tenant: created once the parent Tenant is Ready.
+apiVersion: tenarium.io/v1alpha1
+kind: Tenant
+metadata:
+  name: acme-research
+  namespace: default
+spec:
+  slug: acme-research
+  name: Acme Research
+  parent:
+    name: acme
+  connectionRef:
+    name: tenarium
+---
+# A tenant created from a template (config/samples/tenanttemplate.yaml).
+# The template is used only on creation; changing it later has no effect.
+apiVersion: tenarium.io/v1alpha1
+kind: Tenant
+metadata:
+  name: globex
+  namespace: default
+spec:
+  slug: globex
+  name: Globex
+  template: startup
+  connectionRef:
+    name: tenarium
+---
+# Take over a tenant that already exists in Tenarium, and keep it there
+# when this resource is deleted.
+apiVersion: tenarium.io/v1alpha1
+kind: Tenant
+metadata:
+  name: legacy
+  namespace: default
+  annotations:
+    tenarium.io/adopt: "true"
+spec:
+  slug: legacy
+  deletionPolicy: Orphan
+  connectionRef:
+    name: tenarium

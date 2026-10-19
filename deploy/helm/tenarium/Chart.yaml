@@ -1,0 +1,9 @@
+apiVersion: v2
+name: tenarium
+description: Tenant control plane for multi-tenant SaaS, with a plugin system.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/AimTune/tenarium
+sources: [https://github.com/AimTune/tenarium]
+keywords: [multi-tenant, saas, tenants, control-plane]

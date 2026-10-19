@@ -1,0 +1,126 @@
+{
+  "version.label": {
+    "message": "Next",
+    "description": "The label for version current"
+  },
+  "sidebar.docs.category.Using Tenarium": {
+    "message": "Tenarium’u kullanma",
+    "description": "The label for category 'Using Tenarium' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Integrating": {
+    "message": "Entegrasyon",
+    "description": "The label for category 'Integrating' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Plugins": {
+    "message": "Eklentiler",
+    "description": "The label for category 'Plugins' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Running Tenarium": {
+    "message": "Tenarium’u çalıştırma",
+    "description": "The label for category 'Running Tenarium' in sidebar 'docs'"
+  },
+  "sidebar.docs.doc.Home": {
+    "message": "Ana sayfa",
+    "description": "The label for the doc item 'Home' in sidebar 'docs', linking to the doc index"
+  },
+  "sidebar.docs.doc.Configuration": {
+    "message": "Yapılandırma",
+    "description": "The label for the doc item 'Configuration' in sidebar 'docs', linking to the doc configuration"
+  },
+  "sidebar.docs.doc.REST API": {
+    "message": "REST API",
+    "description": "The label for the doc item 'REST API' in sidebar 'docs', linking to the doc api"
+  },
+  "sidebar.docs.doc.Tenant lifecycle": {
+    "message": "Tenant yaşam döngüsü",
+    "description": "The label for the doc item 'Tenant lifecycle' in sidebar 'docs', linking to the doc tenants"
+  },
+  "sidebar.docs.doc.Plans and placement": {
+    "message": "Planlar ve yerleşim",
+    "description": "The label for the doc item 'Plans and placement' in sidebar 'docs', linking to the doc plans"
+  },
+  "sidebar.docs.doc.Users": {
+    "message": "Kullanıcılar",
+    "description": "The label for the doc item 'Users' in sidebar 'docs', linking to the doc users"
+  },
+  "sidebar.docs.doc.Authentication and authorization": {
+    "message": "Kimlik doğrulama ve yetkilendirme",
+    "description": "The label for the doc item 'Authentication and authorization' in sidebar 'docs', linking to the doc auth"
+  },
+  "sidebar.docs.doc.OpenID provider": {
+    "message": "OpenID sağlayıcısı",
+    "description": "The label for the doc item 'OpenID provider' in sidebar 'docs', linking to the doc oidc-provider"
+  },
+  "sidebar.docs.doc.Tenant webhooks": {
+    "message": "Tenant webhook’ları",
+    "description": "The label for the doc item 'Tenant webhooks' in sidebar 'docs', linking to the doc webhooks"
+  },
+  "sidebar.docs.doc.Event schema registry": {
+    "message": "Olay şema kayıt defteri",
+    "description": "The label for the doc item 'Event schema registry' in sidebar 'docs', linking to the doc event-schemas"
+  },
+  "sidebar.docs.doc.Data protection": {
+    "message": "Veri koruma",
+    "description": "The label for the doc item 'Data protection' in sidebar 'docs', linking to the doc privacy"
+  },
+  "sidebar.docs.doc.Go client and tenariumctl": {
+    "message": "Go istemcisi ve tenariumctl",
+    "description": "The label for the doc item 'Go client and tenariumctl' in sidebar 'docs', linking to the doc client"
+  },
+  "sidebar.docs.doc.Tenant middleware": {
+    "message": "Tenant middleware",
+    "description": "The label for the doc item 'Tenant middleware' in sidebar 'docs', linking to the doc middleware"
+  },
+  "sidebar.docs.doc.Gateway integration": {
+    "message": "Gateway entegrasyonu",
+    "description": "The label for the doc item 'Gateway integration' in sidebar 'docs', linking to the doc gateway"
+  },
+  "sidebar.docs.doc.PostgreSQL row-level security": {
+    "message": "PostgreSQL satır düzeyi güvenlik",
+    "description": "The label for the doc item 'PostgreSQL row-level security' in sidebar 'docs', linking to the doc rls"
+  },
+  "sidebar.docs.doc.Writing Go plugins": {
+    "message": "Go eklentisi yazma",
+    "description": "The label for the doc item 'Writing Go plugins' in sidebar 'docs', linking to the doc plugins/writing-go"
+  },
+  "sidebar.docs.doc.External plugins": {
+    "message": "Harici eklentiler",
+    "description": "The label for the doc item 'External plugins' in sidebar 'docs', linking to the doc plugins/external"
+  },
+  "sidebar.docs.doc.WebAssembly plugins": {
+    "message": "WebAssembly eklentileri",
+    "description": "The label for the doc item 'WebAssembly plugins' in sidebar 'docs', linking to the doc plugins/wasm"
+  },
+  "sidebar.docs.doc.Event archive": {
+    "message": "Olay arşivi",
+    "description": "The label for the doc item 'Event archive' in sidebar 'docs', linking to the doc plugins/archive"
+  },
+  "sidebar.docs.doc.Operations": {
+    "message": "Operasyon",
+    "description": "The label for the doc item 'Operations' in sidebar 'docs', linking to the doc operations"
+  },
+  "sidebar.docs.doc.TLS and managed certificates": {
+    "message": "TLS ve yönetilen sertifikalar",
+    "description": "The label for the doc item 'TLS and managed certificates' in sidebar 'docs', linking to the doc tls"
+  },
+  "sidebar.docs.doc.Secrets at rest": {
+    "message": "Depolanan sırlar",
+    "description": "The label for the doc item 'Secrets at rest' in sidebar 'docs', linking to the doc secrets"
+  },
+  "sidebar.docs.doc.Multi-region deployments": {
+    "message": "Çok bölgeli kurulumlar",
+    "description": "The label for the doc item 'Multi-region deployments' in sidebar 'docs', linking to the doc multi-region"
+  },
+  "sidebar.docs.doc.Architecture": {
+    "message": "Mimari",
+    "description": "The label for the doc item 'Architecture' in sidebar 'docs', linking to the doc architecture"
+  },
+  "sidebar.docs.doc.Testing": {
+    "message": "Test",
+    "description": "The label for the doc item 'Testing' in sidebar 'docs', linking to the doc testing"
+  },
+  "sidebar.docs.doc.Roadmap": {
+    "message": "Yol haritası",
+    "description": "The label for the doc item 'Roadmap' in sidebar 'docs', linking to the doc roadmap"
+  }
+}

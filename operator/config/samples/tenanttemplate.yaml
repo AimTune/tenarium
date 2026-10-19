@@ -1,0 +1,28 @@
+# Presets for new tenants: a Tenant with spec.template: startup starts
+# from these values (its own values win). The API key needs plans:write.
+apiVersion: tenarium.io/v1alpha1
+kind: TenantTemplate
+metadata:
+  name: startup
+  namespace: default
+spec:
+  name: Startup
+  description: Pro plan in the EU with startup branding
+  plan: pro
+  region: eu
+  labels:
+    segment: startup
+  settings:
+    theme: light
+  features:
+    beta_features: true
+  limits:
+    seats: 20
+  branding:
+    primaryColor: "#1a2b3c"
+  roles:
+    - name: billing-admin
+      description: Reads usage and tenant details
+      actions: ["usage:read", "tenants:read"]
+  connectionRef:
+    name: tenarium

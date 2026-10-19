@@ -404,3 +404,14 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Docusaurus website (website/)
+website/node_modules/
+website/build/
+website/.docusaurus/
+
+# Go binaries built in the repository root
+/tenarium
+/tenarium.exe
+/tenariumctl
+/tenariumctl.exe

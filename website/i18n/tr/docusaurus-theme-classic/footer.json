@@ -1,0 +1,62 @@
+{
+  "link.title.Docs": {
+    "message": "Dokümantasyon",
+    "description": "The title of the footer links column with title=Docs in the footer"
+  },
+  "link.title.Community": {
+    "message": "Topluluk",
+    "description": "The title of the footer links column with title=Community in the footer"
+  },
+  "link.title.More": {
+    "message": "Daha fazla",
+    "description": "The title of the footer links column with title=More in the footer"
+  },
+  "link.item.label.Introduction": {
+    "message": "Giriş",
+    "description": "The label of footer link with label=Introduction linking to /docs"
+  },
+  "link.item.label.Configuration": {
+    "message": "Yapılandırma",
+    "description": "The label of footer link with label=Configuration linking to /docs/configuration"
+  },
+  "link.item.label.Plugins": {
+    "message": "Eklentiler",
+    "description": "The label of footer link with label=Plugins linking to /docs/plugins"
+  },
+  "link.item.label.API reference": {
+    "message": "API başvurusu",
+    "description": "The label of footer link with label=API reference linking to pathname:///api/"
+  },
+  "link.item.label.Issues": {
+    "message": "Sorunlar",
+    "description": "The label of footer link with label=Issues linking to https://github.com/AimTune/tenarium/issues"
+  },
+  "link.item.label.Contributing": {
+    "message": "Katkıda bulunma",
+    "description": "The label of footer link with label=Contributing linking to https://github.com/AimTune/tenarium/blob/main/CONTRIBUTING.md"
+  },
+  "link.item.label.Security policy": {
+    "message": "Güvenlik politikası",
+    "description": "The label of footer link with label=Security policy linking to https://github.com/AimTune/tenarium/blob/main/SECURITY.md"
+  },
+  "link.item.label.GitHub": {
+    "message": "GitHub",
+    "description": "The label of footer link with label=GitHub linking to https://github.com/AimTune/tenarium"
+  },
+  "link.item.label.Releases": {
+    "message": "Sürümler",
+    "description": "The label of footer link with label=Releases linking to https://github.com/AimTune/tenarium/releases"
+  },
+  "link.item.label.Changelog": {
+    "message": "Değişiklik günlüğü",
+    "description": "The label of footer link with label=Changelog linking to https://github.com/AimTune/tenarium/blob/main/CHANGELOG.md"
+  },
+  "link.item.label.Roadmap": {
+    "message": "Yol haritası",
+    "description": "The label of footer link with label=Roadmap linking to /docs/roadmap"
+  },
+  "copyright": {
+    "message": "Telif hakkı © 2026 Tenarium katkıcıları. MIT Lisansı ile yayımlanmıştır.",
+    "description": "The footer copyright"
+  }
+}

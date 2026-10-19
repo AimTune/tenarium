@@ -1,0 +1,10 @@
+.git
+.github
+deploy
+docs
+sdks
+terraform-provider
+**/*_test.go
+*.md
+dist
+operator/bin

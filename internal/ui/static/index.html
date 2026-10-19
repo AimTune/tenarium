@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tenarium</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath d='M9 10h14M16 10v13' stroke='white' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Static strings carry their English message key in data-i18n* attributes (see i18n.js). -->
+  <div id="login" class="login" hidden>
+    <form class="card login-card" id="login-form">
+      <div class="login-top">
+        <div class="brand big"><span class="logo">T</span> Tenarium</div>
+        <label class="lang"><span class="sr-only" data-i18n="Language">Language</span><select id="login-lang" data-i18n-label="Language" aria-label="Language"></select></label>
+      </div>
+      <p class="muted" data-i18n="Credentials stay in this browser tab.">Credentials stay in this browser tab.</p>
+      <label><span data-i18n="Sign in with">Sign in with</span>
+        <select name="kind">
+          <option value="password" data-i18n="Email &amp; password">Email &amp; password</option>
+          <option value="sso" data-i18n="Single sign-on (SSO)">Single sign-on (SSO)</option>
+          <option value="bearer" data-i18n="API key / bearer token">API key / bearer token</option>
+          <option value="basic" data-i18n="LDAP username &amp; password">LDAP username &amp; password</option>
+        </select>
+      </label>
+      <label data-kind="password sso"><span data-i18n="Email">Email</span> <input name="email" type="email" autocomplete="username webauthn"></label>
+      <label data-kind="password"><span data-i18n="Password">Password</span> <input name="userpassword" type="password" autocomplete="current-password"></label>
+      <label id="otp-field" hidden><span data-i18n="Code from your authenticator app">Code from your authenticator app</span> <input name="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="123456"></label>
+      <label data-kind="password sso"><span data-i18n="Tenant">Tenant</span> <input name="tenant" data-i18n-placeholder="slug (leave empty for platform admins)" placeholder="slug (leave empty for platform admins)" autocomplete="organization"></label>
+      <label data-kind="bearer" hidden><span data-i18n="Token">Token</span> <input name="token" type="password" autocomplete="off"></label>
+      <label data-kind="basic" hidden><span data-i18n="Username">Username</span> <input name="username" autocomplete="username"></label>
+      <label data-kind="basic" hidden><span data-i18n="Password">Password</span> <input name="password" type="password" autocomplete="current-password"></label>
+      <p class="error" id="login-error" role="alert" hidden></p>
+      <button class="primary" type="submit" data-i18n="Sign in">Sign in</button>
+      <button type="button" id="passkey-login" hidden data-i18n="Sign in with a passkey">Sign in with a passkey</button>
+      <div id="social-login" class="social" hidden></div>
+      <div class="login-links">
+        <a href="#/forgot" class="small" data-kind="password" data-i18n="Forgot your password?">Forgot your password?</a>
+        <button type="button" id="magic-link" class="link small" data-kind="password" data-i18n="Email me a sign-in link">Email me a sign-in link</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="public" class="login" hidden></div>
+
+  <div id="impersonation" class="imp-bar" role="status" hidden></div>
+
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">T</span> Tenarium</div>
+      <nav id="nav" data-i18n-label="Main" aria-label="Main">
+        <a href="#/dashboard" data-route="dashboard" data-i18n="Dashboard">Dashboard</a>
+        <a href="#/tenants" data-route="tenants" data-i18n="Tenants">Tenants</a>
+        <a href="#/plans" data-route="plans" data-i18n="Plans">Plans</a>
+        <a href="#/templates" data-route="templates" data-i18n="Templates">Templates</a>
+        <a href="#/rollouts" data-route="rollouts" data-i18n="Rollouts">Rollouts</a>
+        <a href="#/users" data-route="users" data-i18n="Users">Users</a>
+        <a href="#/events" data-route="events" data-i18n="Events">Events</a>
+        <a href="#/event-schemas" data-route="event-schemas" data-i18n="Event schemas">Event schemas</a>
+        <a href="#/dead-letters" data-route="dead-letters" data-i18n="Dead letters">Dead letters</a>
+        <a href="#/plugins" data-route="plugins" data-i18n="Plugins">Plugins</a>
+        <a href="#/audit" data-route="audit" data-i18n="Audit">Audit</a>
+        <a href="#/oauth-clients" data-route="oauth-clients" data-i18n="OAuth clients">OAuth clients</a>
+        <a href="#/signing-keys" data-route="signing-keys" data-i18n="Signing keys">Signing keys</a>
+        <a href="#/account" data-route="account" data-i18n="Account" hidden>Account</a>
+      </nav>
+      <div class="whoami">
+        <div id="whoami" class="muted small"></div>
+        <label class="lang"><span class="sr-only" data-i18n="Language">Language</span><select id="lang" data-i18n-label="Language" aria-label="Language"></select></label>
+        <button id="logout" class="link" data-i18n="Sign out">Sign out</button>
+      </div>
+    </aside>
+    <main id="main" class="main"></main>
+  </div>
+
+  <dialog id="dialog" aria-labelledby="dialog-title"><form method="dialog" id="dialog-form"></form></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

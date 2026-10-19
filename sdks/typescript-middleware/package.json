@@ -1,0 +1,25 @@
+{
+  "name": "@tenarium/middleware",
+  "version": "0.1.0",
+  "description": "Resolve and enforce the current Tenarium tenant in Node.js applications (Express, Connect, node:http).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AimTune/tenarium",
+    "directory": "sdks/typescript-middleware"
+  }
+}

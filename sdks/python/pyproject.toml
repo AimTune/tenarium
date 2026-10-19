@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tenarium-plugin"
+version = "0.1.0"
+description = "Write Tenarium external plugins in Python."
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.urls]
+Source = "https://github.com/AimTune/tenarium/tree/main/sdks/python"
+
+[tool.setuptools]
+packages = ["tenarium_plugin"]

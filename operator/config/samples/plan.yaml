@@ -1,0 +1,29 @@
+apiVersion: tenarium.io/v1alpha1
+kind: Plan
+metadata:
+  name: pro
+  namespace: default
+spec:
+  name: Pro
+  description: For growing teams
+  features:
+    sso: true
+    audit_log: true
+  limits:
+    seats: 50
+    api_calls: 1000000
+  connectionRef:
+    name: tenarium
+---
+# An add-on: a plan stacked on a tenant's plan (Tenant spec.addOns).
+apiVersion: tenarium.io/v1alpha1
+kind: Plan
+metadata:
+  name: extra-seats
+  namespace: default
+spec:
+  name: 10 extra seats
+  limits:
+    seats: 10
+  connectionRef:
+    name: tenarium

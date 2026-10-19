@@ -1,0 +1,37 @@
+# Aggregated into the built-in "edit" and "admin" roles so namespace users
+# can manage Tenants, Plans, Rollouts and TenantTemplates.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenarium-editor
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+  - apiGroups: [tenarium.io]
+    resources: [tenants, plans, rollouts, tenanttemplates, tenariumconnections]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [tenarium.io]
+    resources: [tenants/status, plans/status, rollouts/status, tenanttemplates/status, tenariumconnections/status]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenarium-viewer
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: [tenarium.io]
+    resources:
+      - tenants
+      - plans
+      - rollouts
+      - tenanttemplates
+      - tenariumconnections
+      - tenants/status
+      - plans/status
+      - rollouts/status
+      - tenanttemplates/status
+      - tenariumconnections/status
+    verbs: [get, list, watch]

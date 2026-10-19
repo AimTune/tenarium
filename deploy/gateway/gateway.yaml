@@ -1,0 +1,82 @@
+# tenarium-gateway configuration (see docs/gateway.md).
+#
+#   tenarium-gateway -config deploy/gateway/gateway.yaml
+#
+# ${VAR} references are expanded from the environment.
+
+listen: ":8090"
+# metrics_listen: ":9090"   # serve /metrics on its own port instead of :8090
+
+tenarium:
+  url: http://tenarium:8080          # API source, custom domains, token discovery
+  api_key: ${TENARIUM_API_KEY}
+  timeout: 5s
+  # jwks_url / issuer / audience skip OpenID discovery at startup:
+  # jwks_url: http://tenarium:8080/.well-known/jwks.json
+  # issuer: https://tenarium.example.com
+
+# Tenants come from the cache written by the redis plugin (cache feature
+# enabled, same key_prefix). Use "api" to read the REST API instead.
+source:
+  type: redis
+  cache_ttl: 30s          # in-memory cache in front of the source
+  negative_ttl: 5s        # unknown tenants
+  max_entries: 10000
+  domain_cache_ttl: 5m    # custom domain lookups
+
+redis:
+  addr: redis:6379
+  password: ${REDIS_PASSWORD}
+  db: 0
+  prefix: "tenarium:"     # the redis plugin's key_prefix
+
+# Tried in order; the first match wins. A token for tenant A used against
+# tenant B's host or path is refused (403 tenant_mismatch).
+resolve:
+  - token: true
+  - subdomain: app.example.com     # acme.app.example.com -> acme
+  - header: X-Tenant-ID
+  - path: /t/                      # /t/acme/...
+  - custom_domain: true            # GET /v1/domains/resolve
+
+allowed_statuses: [active]
+optional: false                    # true: let requests without a tenant through
+
+# X-Tenant-Cell: label "cell", else the plan mapping, else the default.
+cell:
+  label: cell
+  default: shared
+  plans:
+    enterprise: dedicated
+
+expose_features: true              # X-Tenant-Features: a,b,c
+
+features:
+  - path_prefix: /api/reports
+    feature: reports
+  - host: sso.example.com
+    feature: sso
+  - path_prefix: /api/exports
+    methods: [POST]
+    feature: exports
+
+# Per-tenant rate limit: the "rps" entitlement limit (requests per period),
+# default_rate for tenants without it. A limit of -1 is unlimited, 0 blocks.
+rate_limit:
+  backend: redis                   # off | local | redis (shared by all replicas)
+  metric: rps
+  burst_metric: rps_burst
+  period: 1s
+  default_rate: 50
+  default_burst: 100
+  fail_open: true                  # allow requests while Redis is down
+  prefix: "tenarium:gw:rl:"
+
+log:
+  level: info
+  format: json
+
+timeouts:
+  read_header: 5s
+  idle: 2m
+  shutdown: 15s

@@ -1,0 +1,101 @@
+# Several replicas are safe with the postgres store: each event
+# subscription is processed by exactly one replica at a time (leases), and
+# another takes over within events.lease_ttl if it dies.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/aimtune/tenarium
+  tag: ""          # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Secret values exposed to the container as environment variables and
+# referenced from config as ${NAME}. Either list them here (a Secret is
+# created) or point existingSecret at your own Secret.
+secretEnv:
+  TENARIUM_API_KEY: ""
+  TENARIUM_DATABASE_URL: ""
+existingSecret: ""
+
+# Extra non-secret environment variables.
+env: []
+
+# Tenarium configuration (config.yaml). ${VAR} is expanded from the env.
+config:
+  server:
+    addr: ":8080"
+    api_keys: ["${TENARIUM_API_KEY}"]
+    shutdown_timeout: 25s
+  log:
+    level: info
+    format: json
+  store:
+    driver: postgres
+    dsn: "${TENARIUM_DATABASE_URL}"
+    # read_dsn: "${TENARIUM_READ_DATABASE_URL}"   # optional read replica for list queries
+  events:
+    lease_ttl: 15s
+    # Names this replica as lease owner in logs and the leases table.
+    instance_id: "${POD_NAME}"
+    # region: eu          # with region-scoped plugins: run them on replicas in their region
+  ui:
+    enabled: true
+  plugins: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile: {type: RuntimeDefault}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: tenarium.example.com
+      paths: [{path: /, pathType: Prefix}]
+  tls: []
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {memory: 512Mi}
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Creates a Prometheus Operator ServiceMonitor scraping /metrics.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

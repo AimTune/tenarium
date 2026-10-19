@@ -1,0 +1,60 @@
+# Local stack.
+#
+#   docker compose up -d                       # Postgres + Redpanda (Kafka) + Tenarium
+#   docker compose --profile keycloak up -d    # ... plus Keycloak
+#
+# Tenarium:          http://localhost:8080/ui/   (API key: dev-key)
+# Redpanda console:  http://localhost:8081
+# Keycloak:          http://localhost:8180       (admin / admin)
+# Kafka from host:   localhost:19092
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: tenarium
+      POSTGRES_USER: tenarium
+      POSTGRES_PASSWORD: tenarium
+    ports: ["15432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenarium"]
+      interval: 2s
+      retries: 30
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda start
+      - --mode dev-container
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    ports: ["19092:19092"]
+
+  console:
+    image: redpandadata/console:latest
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports: ["8081:8080"]
+    depends_on: [redpanda]
+
+  tenarium:
+    build: .
+    environment:
+      TENARIUM_API_KEY: dev-key
+    volumes: [./deploy/compose/config.yaml:/etc/tenarium/config.yaml:ro]
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redpanda: {condition: service_started}
+
+  keycloak:
+    profiles: [keycloak]
+    image: quay.io/keycloak/keycloak:latest
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports: ["8180:8080"]
+
+volumes:
+  pgdata:

@@ -1,0 +1,26 @@
+{
+  "title": {
+    "message": "Tenarium",
+    "description": "The title in the navbar"
+  },
+  "logo.alt": {
+    "message": "Tenarium logosu",
+    "description": "The alt text of navbar logo"
+  },
+  "item.label.Docs": {
+    "message": "Dokümantasyon",
+    "description": "Navbar item with label Docs"
+  },
+  "item.label.Plugins": {
+    "message": "Eklentiler",
+    "description": "Navbar item with label Plugins"
+  },
+  "item.label.API reference": {
+    "message": "API başvurusu",
+    "description": "Navbar item with label API reference"
+  },
+  "item.label.GitHub": {
+    "message": "GitHub",
+    "description": "Navbar item with label GitHub"
+  }
+}

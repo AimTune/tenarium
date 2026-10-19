@@ -1,0 +1,21 @@
+# Turn the "new-editor" feature on for 10% of the EU tenants on the pro
+# plan, plus one tenant that always gets it. The API key needs plans:write.
+apiVersion: tenarium.io/v1alpha1
+kind: Rollout
+metadata:
+  name: new-editor
+  namespace: default
+spec:
+  # feature defaults to metadata.name; set it for names Kubernetes does not
+  # allow, e.g. "audit_export".
+  feature: new-editor
+  enabled: true
+  percentage: 10
+  plans: [pro]
+  regions: [eu]
+  labels:
+    beta: "yes"
+  include: []
+  exclude: []
+  connectionRef:
+    name: tenarium

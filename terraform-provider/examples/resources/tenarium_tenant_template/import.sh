@@ -1,0 +1,1 @@
+terraform import tenarium_tenant_template.startup startup

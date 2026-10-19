@@ -1,0 +1,147 @@
+# Envoy in front of tenant cells, with tenarium-gateway as an ext_authz
+# HTTP service (see docs/gateway.md).
+#
+#   envoy -c deploy/gateway/envoy.yaml
+#
+# Flow: ext_authz sends the request's method, Host, path (after the
+# path_prefix) and selected headers to tenarium-gateway. On 200 the
+# X-Tenant-* headers overwrite the request's; clear_route_cache makes Envoy
+# pick the route again, now on X-Tenant-Cell. Denials (401/403/404/429/503)
+# are returned to the client with their JSON body.
+static_resources:
+  listeners:
+    - name: ingress
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8080 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress
+                route_config:
+                  name: cells
+                  virtual_hosts:
+                    - name: app
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-tenant-cell
+                                string_match: { exact: eu-1 }
+                          route: { cluster: cell_eu_1 }
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-tenant-cell
+                                string_match: { exact: dedicated }
+                          route: { cluster: cell_dedicated }
+                        # Everything else, including the "shared" default cell.
+                        - match: { prefix: "/" }
+                          route: { cluster: cell_shared }
+                http_filters:
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      # Deny when the gateway is unreachable (503 to the client).
+                      failure_mode_allow: false
+                      status_on_error: { code: ServiceUnavailable }
+                      # Re-select the route after X-Tenant-Cell was added.
+                      clear_route_cache: true
+                      # Request headers sent to the gateway. Method, Host and Path are
+                      # always part of the check; list Authorization and the headers
+                      # your resolve rules read.
+                      allowed_headers:
+                        patterns:
+                          - exact: authorization
+                            ignore_case: true
+                          - exact: x-tenant-id
+                            ignore_case: true
+                          - exact: x-forwarded-proto
+                            ignore_case: true
+                      http_service:
+                        server_uri:
+                          uri: http://tenarium-gateway:8090
+                          cluster: tenarium_gateway
+                          timeout: 0.5s
+                        # The check request path is /envoy + original path and query.
+                        path_prefix: /envoy
+                        authorization_response:
+                          # Copied onto the upstream request, replacing client values.
+                          allowed_upstream_headers:
+                            patterns:
+                              - exact: x-tenant-id
+                                ignore_case: true
+                              - exact: x-tenant-slug
+                                ignore_case: true
+                              - exact: x-tenant-plan
+                                ignore_case: true
+                              - exact: x-tenant-cell
+                                ignore_case: true
+                              - exact: x-tenant-features
+                                ignore_case: true
+                          # Rate limit state for the client on success.
+                          allowed_client_headers_on_success:
+                            patterns:
+                              - prefix: ratelimit-
+                                ignore_case: true
+                          # Headers of denials sent to the client.
+                          allowed_client_headers:
+                            patterns:
+                              - exact: content-type
+                                ignore_case: true
+                              - exact: retry-after
+                                ignore_case: true
+                              - exact: www-authenticate
+                                ignore_case: true
+                              - exact: x-tenarium-error
+                                ignore_case: true
+                              - prefix: ratelimit-
+                                ignore_case: true
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: tenarium_gateway
+      type: STRICT_DNS
+      connect_timeout: 0.25s
+      load_assignment:
+        cluster_name: tenarium_gateway
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: tenarium-gateway, port_value: 8090 }
+    - name: cell_shared
+      type: STRICT_DNS
+      connect_timeout: 1s
+      load_assignment:
+        cluster_name: cell_shared
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: app-shared, port_value: 8080 }
+    - name: cell_eu_1
+      type: STRICT_DNS
+      connect_timeout: 1s
+      load_assignment:
+        cluster_name: cell_eu_1
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: app-eu-1, port_value: 8080 }
+    - name: cell_dedicated
+      type: STRICT_DNS
+      connect_timeout: 1s
+      load_assignment:
+        cluster_name: cell_dedicated
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: app-dedicated, port_value: 8080 }

@@ -1,0 +1,40 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - nolintlint
+    - revive
+    - unconvert
+    - unparam
+    - bodyclose
+    - noctx
+    - sqlclosecheck
+    - rowserrcheck
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104 # unhandled errors are covered by errcheck where it matters
+      - G304 # file paths come from operator configuration
+      - G204 # managed plugin commands come from operator configuration
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+      - name: package-comments
+        disabled: true
+  gocritic:
+    disabled-checks:
+      - ifElseChain
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters: [gosec, noctx, bodyclose, unparam]
+    - path: examples/
+      linters: [gosec]

@@ -1,0 +1,225 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: rollouts.tenarium.io
+spec:
+  group: tenarium.io
+  names:
+    categories:
+    - tenarium
+    kind: Rollout
+    listKind: RolloutList
+    plural: rollouts
+    singular: rollout
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.feature
+      name: Feature
+      type: string
+    - jsonPath: .spec.enabled
+      name: Enabled
+      type: boolean
+    - jsonPath: .spec.percentage
+      name: Percentage
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Synced")].status
+      name: Synced
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Rollout is a Tenarium feature rollout: a feature turned on gradually,
+          independently of plans. Rollouts are platform-only: the API key needs
+          plans:write.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RolloutSpec is the desired state of a Tenarium feature rollout. A tenant
+              gets the feature when the rollout is enabled, the tenant is not
+              excluded, and it is either included or matches every cohort filter that
+              is set (plans, regions, labels) and falls within the percentage.
+            properties:
+              connectionRef:
+                description: |-
+                  ConnectionRef selects the TenariumConnection to use. When omitted, the
+                  operator's default connection is used.
+                properties:
+                  name:
+                    description: Name of the TenariumConnection.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy decides whether deleting this resource deletes the
+                  rollout in Tenarium.
+                enum:
+                - Delete
+                - Orphan
+                type: string
+              enabled:
+                description: Enabled switches the rollout on; false is the kill switch.
+                type: boolean
+              exclude:
+                description: Exclude lists tenant IDs that never get the feature.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
+              feature:
+                description: |-
+                  Feature is the feature the rollout turns on, e.g. "new-editor". It
+                  identifies the rollout in Tenarium. Defaults to metadata.name.
+                pattern: ^[a-z0-9][a-z0-9_.:-]{0,63}$
+                type: string
+              include:
+                description: |-
+                  Include lists tenant IDs that always get the feature (unless
+                  excluded).
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
+              labels:
+                additionalProperties:
+                  type: string
+                description: Labels limits the cohort to tenants carrying all of these
+                  labels.
+                type: object
+              percentage:
+                description: |-
+                  Percentage of matching tenants (0-100) that get the feature. The
+                  choice is stable: raising it keeps the tenants that already have it.
+                maximum: 100
+                minimum: 0
+                type: integer
+              plans:
+                description: Plans limits the cohort to tenants on these plans.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
+              regions:
+                description: Regions limits the cohort to tenants in these regions.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
+            type: object
+            x-kubernetes-validations:
+            - message: feature is immutable
+              rule: has(self.feature) == has(oldSelf.feature) && (!has(self.feature)
+                || self.feature == oldSelf.feature)
+          status:
+            description: RolloutStatus is the observed state of a Rollout.
+            properties:
+              conditions:
+                description: 'Conditions: Ready and Synced.'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              feature:
+                description: Feature of the rollout in Tenarium once it is created
+                  or adopted.
+                type: string
+              lastSyncTime:
+                description: LastSyncTime is when the rollout was last compared with
+                  Tenarium.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the generation last reconciled.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

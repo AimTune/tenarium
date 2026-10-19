@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>API reference | Tenarium</title>
+    <meta name="description" content="Tenarium REST API reference (OpenAPI 3.1)" />
+    <link rel="icon" href="/img/logo.svg" type="image/svg+xml" />
+    <style>
+      body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #fff; }
+      .topbar { display: flex; align-items: center; gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid #e3e6ea; }
+      .topbar a { color: #1e5bd8; text-decoration: none; font-weight: 600; }
+      .topbar img { height: 24px; vertical-align: middle; }
+      .topbar .spacer { flex: 1; }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <a href="/"><img src="/img/logo.svg" alt="" /> Tenarium</a>
+      <span class="spacer"></span>
+      <a href="/docs/api">REST API guide</a>
+      <a href="/api/openapi.yaml" download>openapi.yaml</a>
+    </div>
+    <div id="redoc"></div>
+    <script src="/api/redoc.standalone.js"></script>
+    <script>
+      Redoc.init('/api/openapi.yaml', {
+        hideDownloadButton: true,
+        expandResponses: '200,201',
+        theme: { colors: { primary: { main: '#1e5bd8' } } }
+      }, document.getElementById('redoc'));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,38 @@
+# Traefik static configuration (see docs/gateway.md); the routers live in
+# traefik-dynamic.yml.
+#
+#   traefik --configFile=deploy/gateway/traefik.yml
+#
+# Traefik matches routers before middlewares run, so a router cannot see
+# the X-Tenant-Cell header that ForwardAuth adds. Routing therefore takes
+# two hops inside the same Traefik:
+#
+#   1. entrypoint "web" (public): router "edge" runs the tenarium
+#      ForwardAuth middleware and forwards to the "cells" entrypoint;
+#   2. entrypoint "cells" (loopback only): routers match
+#      Header(`X-Tenant-Cell`, `...`) and send the request to the cell.
+#
+# ForwardAuth replaces the X-Tenant-* headers listed in authResponseHeaders
+# (removing client supplied values), so the second hop can trust them.
+entryPoints:
+  web:
+    address: ":8080"
+  cells:
+    # Loopback only: never expose this entrypoint.
+    address: "127.0.0.1:8081"
+    forwardedHeaders:
+      # Keep X-Forwarded-* set by the first hop.
+      trustedIPs: ["127.0.0.1/32"]
+  traefik:
+    # Ping (health) endpoint.
+    address: ":9000"
+
+providers:
+  file:
+    filename: /etc/traefik/traefik-dynamic.yml
+    watch: true
+
+ping: {}
+log:
+  level: INFO
+accessLog: {}
