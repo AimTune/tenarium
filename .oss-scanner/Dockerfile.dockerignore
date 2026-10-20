@@ -1,0 +1,13 @@
+# BuildKit uses this file instead of the root .dockerignore when building
+# .oss-scanner/Dockerfile. The root one trims the production image (it drops
+# tests and docs); the audit image needs the whole source tree, so only
+# downloaded or generated artifacts are left out here.
+**/node_modules
+website/build
+website/.docusaurus
+tests/ui/.server
+tests/ui/test-results
+tests/ui/playwright-report
+operator/bin
+dist
+*.exe

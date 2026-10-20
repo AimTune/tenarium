@@ -58,8 +58,10 @@ func newFakeGCS(t *testing.T) *fakeGCS {
 	mux.HandleFunc("PATCH /storage/v1/b/{b}", f.bucketOp)
 	mux.HandleFunc("DELETE /storage/v1/b/{b}", f.bucketOp)
 	mux.HandleFunc("GET /storage/v1/b/{b}/o", f.listObjects)
-	mux.HandleFunc("GET /storage/v1/b/{b}/o/{o}", f.objectOp)
-	mux.HandleFunc("DELETE /storage/v1/b/{b}/o/{o}", f.objectOp)
+	// {o...}: object names contain "/" (sent as %2F); match names spanning
+	// several path segments too (Go 1.26.9 splits them, 1.26.1 did not).
+	mux.HandleFunc("GET /storage/v1/b/{b}/o/{o...}", f.objectOp)
+	mux.HandleFunc("DELETE /storage/v1/b/{b}/o/{o...}", f.objectOp)
 	mux.HandleFunc("POST /upload/storage/v1/b/{b}/o", f.upload)
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if f.wantAuth != "" && r.Header.Get("Authorization") != f.wantAuth {
