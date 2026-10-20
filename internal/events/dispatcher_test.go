@@ -295,11 +295,16 @@ func TestLeaseAffinityPrefersTheSubscriptionsRegion(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		return count("eu-1") > 0
 	})
-	before := count("us-1")
+	// The instance elsewhere notices the takeover at its next renewal (every
+	// TTL/3); until then both may deliver, which at-least-once allows. Wait
+	// a full TTL before checking that only the preferred one delivers.
+	time.Sleep(300 * time.Millisecond)
+	before, beforeEU := count("us-1"), count("eu-1")
 	appendEvents(t, s, "e2", "e3")
 	eu.Notify()
 	us.Notify()
-	time.Sleep(500 * time.Millisecond)
+	eventually(t, func() bool { return count("eu-1") >= beforeEU+2 })
+	time.Sleep(200 * time.Millisecond)
 	if count("us-1") != before {
 		t.Fatalf("instance outside the region kept processing: %v", byInstance)
 	}
