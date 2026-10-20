@@ -438,6 +438,8 @@ func TestDatabaseModeRename(t *testing.T) {
 	admin := testDSN(t)
 	tenant := uniqueTenant(t, admin)
 	p, _ := newPlugin(t, map[string]any{"dsn": admin, "mode": "database", "on_deprovision": "rename"})
+	// The new name carries a timestamp: pin it so the check below computes the same one.
+	p.now = func() time.Time { return time.Unix(1700000000, 0) }
 	ctx := context.Background()
 	if err := p.Provision(ctx, tenant); err != nil {
 		t.Fatal(err)
