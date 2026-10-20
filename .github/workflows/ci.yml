@@ -84,7 +84,10 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64
+          version: v1.64.8
+          # The released v1.64 binaries are built with Go 1.24 and refuse a Go
+          # 1.26 module; build the linter with the Go installed above.
+          install-mode: goinstall
 
   helm:
     runs-on: ubuntu-latest

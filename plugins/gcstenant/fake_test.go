@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,10 +59,8 @@ func newFakeGCS(t *testing.T) *fakeGCS {
 	mux.HandleFunc("PATCH /storage/v1/b/{b}", f.bucketOp)
 	mux.HandleFunc("DELETE /storage/v1/b/{b}", f.bucketOp)
 	mux.HandleFunc("GET /storage/v1/b/{b}/o", f.listObjects)
-	// {o...}: object names contain "/" (sent as %2F); match names spanning
-	// several path segments too (Go 1.26.9 splits them, 1.26.1 did not).
-	mux.HandleFunc("GET /storage/v1/b/{b}/o/{o...}", f.objectOp)
-	mux.HandleFunc("DELETE /storage/v1/b/{b}/o/{o...}", f.objectOp)
+	mux.HandleFunc("GET /storage/v1/b/{b}/o/{o}", f.objectOp)
+	mux.HandleFunc("DELETE /storage/v1/b/{b}/o/{o}", f.objectOp)
 	mux.HandleFunc("POST /upload/storage/v1/b/{b}/o", f.upload)
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if f.wantAuth != "" && r.Header.Get("Authorization") != f.wantAuth {
@@ -227,19 +226,28 @@ func (f *fakeGCS) listObjects(w http.ResponseWriter, r *http.Request) {
 		}
 		return all[i].Gen < all[j].Gen
 	})
-	start, _ := strconv.Atoi(q.Get("pageToken"))
+	// Like GCS, the page token is a cursor (the last object returned), not an
+	// offset, so objects deleted while a client pages do not shift the pages.
+	if token := q.Get("pageToken"); token != "" {
+		name, gen, _ := strings.Cut(token, "#")
+		g, _ := strconv.ParseInt(gen, 10, 64)
+		all = slices.DeleteFunc(all, func(o *fakeObject) bool {
+			return o.Name < name || o.Name == name && o.Gen <= g
+		})
+	}
 	limit, _ := strconv.Atoi(q.Get("maxResults"))
 	if limit <= 0 || limit > 2 {
 		limit = 2 // small pages exercise pagination
 	}
-	end := min(start+limit, len(all))
+	end := min(limit, len(all))
 	var items []any
-	for _, o := range all[start:end] {
+	for _, o := range all[:end] {
 		items = append(items, objRes(b.Name, o))
 	}
 	resp := map[string]any{"items": items}
 	if end < len(all) {
-		resp["nextPageToken"] = strconv.Itoa(end)
+		last := all[end-1]
+		resp["nextPageToken"] = last.Name + "#" + strconv.FormatInt(last.Gen, 10)
 	}
 	writeJSON(w, resp)
 }

@@ -26,6 +26,14 @@ type fakeOPA struct {
 	authHdr string
 }
 
+// set changes the fake's behaviour under its lock (handlers may still be
+// running from a previous request).
+func (f *fakeOPA) set(change func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	change()
+}
+
 func (f *fakeOPA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.authHdr = r.Header.Get("Authorization")
@@ -160,7 +168,7 @@ func TestInput(t *testing.T) {
 func TestFailMode(t *testing.T) {
 	p, f, _ := setup(t, map[string]any{"timeout": "50ms"}, func(Input) string { return `{"result": true}` })
 	ctx := context.Background()
-	f.status = http.StatusInternalServerError
+	f.set(func() { f.status = http.StatusInternalServerError })
 	if got, err := p.Authorize(ctx, ann, sdk.ActionTenantsRead, tenant); err != nil || got != sdk.Abstain {
 		t.Fatalf("got %v %v", got, err)
 	}
@@ -171,12 +179,11 @@ func TestFailMode(t *testing.T) {
 	if r := p.Check(ctx, ann, sdk.ActionTenantsRead, tenant); r.Decision != sdk.Deny || !strings.Contains(r.Reason, "boom") {
 		t.Fatalf("got %+v", r)
 	}
-	f.status = 0
-	f.slow = 200 * time.Millisecond
+	f.set(func() { f.status, f.slow = 0, 200*time.Millisecond })
 	if r := p.Check(ctx, ann, sdk.ActionTenantsRead, tenant); r.Decision != sdk.Deny {
 		t.Fatalf("timeout: %+v", r)
 	}
-	f.slow = 0
+	f.set(func() { f.slow = 0 })
 	if err := p.Health(ctx); err != nil {
 		t.Fatal(err)
 	}
