@@ -128,7 +128,7 @@ POST /v1/plugins/{instance}/replay
   "type": "tenant.*",
   "tenant_id": "",
   "url": "https://billing.example.com/hooks/tenarium",
-  "secret": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+  "secret": "<the receiver's signing secret, e.g. whsec_ + base64>",
   "limit": 0
 }
 ```

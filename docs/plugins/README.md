@@ -153,7 +153,7 @@ producer is idempotent with `acks=all`. `/readyz` checks broker connectivity.
   name: billing
   config:
     url: https://billing.internal/hooks/tenarium
-    secret: whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw   # Standard Webhooks; or any string
+    secret: ${BILLING_WEBHOOK_SECRET}   # Standard Webhooks ("whsec_" + base64) or any string
     events: [tenant.created, tenant.deleted, tenant.plan_changed]
     headers: {X-Env: prod}
     timeout: 10s
